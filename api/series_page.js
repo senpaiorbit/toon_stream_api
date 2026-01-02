@@ -4,7 +4,6 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
-// Helper function to read base URL from file
 function getBaseUrl() {
   try {
     const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
@@ -16,7 +15,6 @@ function getBaseUrl() {
   }
 }
 
-// Helper function to extract image URL
 function extractImageUrl(imgSrc) {
   if (!imgSrc) return null;
   if (imgSrc.startsWith('//')) {
@@ -25,7 +23,6 @@ function extractImageUrl(imgSrc) {
   return imgSrc;
 }
 
-// Helper function to extract metadata from class names
 function extractMetadata(classList) {
   const metadata = {
     categories: [],
@@ -39,7 +36,6 @@ function extractMetadata(classList) {
 
   if (!classList) return metadata;
 
-  // Extract categories
   const categoryMatches = classList.match(/category-[\w-]+/g);
   if (categoryMatches) {
     categoryMatches.forEach(cat => {
@@ -47,7 +43,6 @@ function extractMetadata(classList) {
     });
   }
 
-  // Extract tags
   const tagMatches = classList.match(/tag-[\w-]+/g);
   if (tagMatches) {
     tagMatches.forEach(tag => {
@@ -55,7 +50,6 @@ function extractMetadata(classList) {
     });
   }
 
-  // Extract cast
   const castMatches = classList.match(/cast_tv-[\w-]+/g);
   if (castMatches) {
     castMatches.forEach(member => {
@@ -63,7 +57,6 @@ function extractMetadata(classList) {
     });
   }
 
-  // Extract directors
   const directorMatches = classList.match(/directors_tv-[\w-]+/g);
   if (directorMatches) {
     directorMatches.forEach(director => {
@@ -71,7 +64,6 @@ function extractMetadata(classList) {
     });
   }
 
-  // Extract countries
   const countryMatches = classList.match(/country-[\w-]+/g);
   if (countryMatches) {
     countryMatches.forEach(country => {
@@ -79,13 +71,11 @@ function extractMetadata(classList) {
     });
   }
 
-  // Extract letter
   const letterMatch = classList.match(/letters-([\w-]+)/);
   if (letterMatch) {
     metadata.letters = letterMatch[1];
   }
 
-  // Extract year
   const yearMatch = classList.match(/annee-(\d+)/);
   if (yearMatch) {
     metadata.year = yearMatch[1];
@@ -94,13 +84,11 @@ function extractMetadata(classList) {
   return metadata;
 }
 
-// Scrape series items
 function scrapeSeries($) {
   const series = [];
   
   $('.section.movies .post-lst li').each((index, element) => {
     const $elem = $(element);
-    const $article = $elem.find('article');
     const $link = $elem.find('.lnk-blk');
     const $img = $elem.find('img');
     const $title = $elem.find('.entry-title');
@@ -124,7 +112,6 @@ function scrapeSeries($) {
   return series;
 }
 
-// Scrape pagination
 function scrapePagination($) {
   const pagination = {
     currentPage: 1,
@@ -164,7 +151,6 @@ function scrapePagination($) {
   return pagination;
 }
 
-// Scrape random/sidebar series
 function scrapeRandomSeries($) {
   const randomSeries = [];
   
@@ -193,7 +179,6 @@ function scrapeRandomSeries($) {
   return randomSeries;
 }
 
-// Main scraper function
 async function scrapeSeriesPage(baseUrl, pageNumber = 1) {
   try {
     let seriesUrl;
@@ -213,11 +198,8 @@ async function scrapeSeriesPage(baseUrl, pageNumber = 1) {
     });
     
     const $ = cheerio.load(response.data);
-    
-    // Get page title
     const pageTitle = $('.section-title').first().text().trim();
     
-    // Scrape all sections
     const data = {
       baseUrl: baseUrl,
       pageUrl: seriesUrl,
@@ -245,15 +227,12 @@ async function scrapeSeriesPage(baseUrl, pageNumber = 1) {
     console.error('Scraping error:', error.message);
     return {
       success: false,
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     };
   }
 }
 
-// Vercel serverless function handler
 module.exports = async (req, res) => {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -264,7 +243,6 @@ module.exports = async (req, res) => {
     return;
   }
   
-  // Only allow GET requests
   if (req.method !== 'GET') {
     return res.status(405).json({ 
       success: false, 
@@ -273,7 +251,6 @@ module.exports = async (req, res) => {
   }
   
   try {
-    // Get base URL from file
     const baseUrl = getBaseUrl();
     
     if (!baseUrl) {
@@ -283,7 +260,6 @@ module.exports = async (req, res) => {
       });
     }
     
-    // Get page number from query parameter
     const pageNumber = parseInt(req.query.page) || 1;
     
     if (pageNumber < 1) {
@@ -293,10 +269,7 @@ module.exports = async (req, res) => {
       });
     }
     
-    // Scrape the series page
     const result = await scrapeSeriesPage(baseUrl, pageNumber);
-    
-    // Return JSON response
     res.status(result.success ? 200 : 500).json(result);
     
   } catch (error) {
