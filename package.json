@@ -1,7 +1,7 @@
 {
   "name": "toonstream-scraper",
-  "version": "1.0.0",
-  "description": "Vercel serverless scraper for toonstream homepage",
+  "version": "2.0.0",
+  "description": "Vercel serverless scraper for toonstream website",
   "main": "api/index.js",
   "scripts": {
     "dev": "vercel dev",
