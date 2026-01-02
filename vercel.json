@@ -2,18 +2,44 @@
   "version": 2,
   "builds": [
     {
-      "src": "api/index.js",
+      "src": "api/*.js",
       "use": "@vercel/node"
     }
   ],
   "routes": [
     {
-      "src": "/api",
+      "src": "/home",
       "dest": "/api/index.js"
     },
     {
+      "src": "/series/page/(.*)",
+      "dest": "/api/series_page.js?page=$1"
+    },
+    {
+      "src": "/series",
+      "dest": "/api/series_page.js"
+    },
+    {
+      "src": "/movies/page/(.*)",
+      "dest": "/api/movies_page.js?page=$1"
+    },
+    {
+      "src": "/movies",
+      "dest": "/api/movies_page.js"
+    },
+    {
+      "src": "/api/proxy",
+      "dest": "/api/proxy.js"
+    },
+    {
       "src": "/(.*)",
-      "dest": "/api/index.js"
+      "dest": "/api/proxy.js?path=/$1"
     }
-  ]
+  ],
+  "functions": {
+    "api/*.js": {
+      "memory": 1024,
+      "maxDuration": 30
+    }
+  }
 }
