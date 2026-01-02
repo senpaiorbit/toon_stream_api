@@ -64,7 +64,6 @@ function scrapeLatestEpisodes($) {
   
   $('#widget_list_episodes-8 .post-lst li').each((index, element) => {
     const $elem = $(element);
-    const $article = $elem.find('article');
     const $link = $elem.find('.lnk-blk');
     const $img = $elem.find('img');
     const $title = $elem.find('.entry-title');
@@ -90,7 +89,6 @@ function scrapeContent($, sectionId) {
   
   $(`#${sectionId} .post-lst li`).each((index, element) => {
     const $elem = $(element);
-    const $article = $elem.find('article');
     const $link = $elem.find('.lnk-blk');
     const $img = $elem.find('img');
     const $title = $elem.find('.entry-title');
@@ -152,7 +150,7 @@ function scrapeContent($, sectionId) {
       imageAlt: $img.attr('alt') || '',
       categories: categories,
       tags: tags,
-      cast: cast.slice(0, 10), // Limit cast to first 10
+      cast: cast.slice(0, 10),
       directors: directors,
       countries: countries
     });
@@ -216,7 +214,6 @@ async function scrapeHomePage(baseUrl) {
     
     const $ = cheerio.load(response.data);
     
-    // Scrape all sections
     const data = {
       baseUrl: baseUrl,
       scrapedAt: new Date().toISOString(),
@@ -252,7 +249,6 @@ async function scrapeHomePage(baseUrl) {
 
 // Vercel serverless function handler
 module.exports = async (req, res) => {
-  // Enable CORS
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -263,7 +259,6 @@ module.exports = async (req, res) => {
     return;
   }
   
-  // Only allow GET requests
   if (req.method !== 'GET') {
     return res.status(405).json({ 
       success: false, 
@@ -272,7 +267,6 @@ module.exports = async (req, res) => {
   }
   
   try {
-    // Get base URL from file
     const baseUrl = getBaseUrl();
     
     if (!baseUrl) {
@@ -282,10 +276,7 @@ module.exports = async (req, res) => {
       });
     }
     
-    // Scrape the homepage
     const result = await scrapeHomePage(baseUrl);
-    
-    // Return JSON response
     res.status(result.success ? 200 : 500).json(result);
     
   } catch (error) {
