@@ -1,5 +1,8 @@
-{
-  "rewrites": [
+"rewrites": [
+    {
+      "source": "/",
+      "destination": "/api/index"
+    },
     {
       "source": "/home",
       "destination": "/api/index"
@@ -9,16 +12,32 @@
       "destination": "/api/series_page?page=:page"
     },
     {
+      "source": "/series/page/?",
+      "destination": "/api/series_page?page=1"
+    },
+    {
+      "source": "/series/page",
+      "destination": "/api/series_page?page=1"
+    },
+    {
       "source": "/series",
-      "destination": "/api/series_page"
+      "destination": "/api/series_page?page=1"
     },
     {
       "source": "/movies/page/:page",
       "destination": "/api/movies_page?page=:page"
     },
     {
+      "source": "/movies/page/?",
+      "destination": "/api/movies_page?page=1"
+    },
+    {
+      "source": "/movies/page",
+      "destination": "/api/movies_page?page=1"
+    },
+    {
       "source": "/movies",
-      "destination": "/api/movies_page"
+      "destination": "/api/movies_page?page=1"
     },
     {
       "source": "/api/proxy",
