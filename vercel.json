@@ -1,4 +1,5 @@
-"rewrites": [
+{
+  "rewrites": [
     {
       "source": "/",
       "destination": "/api/index"
@@ -54,3 +55,4 @@
       "maxDuration": 30
     }
   }
+}
