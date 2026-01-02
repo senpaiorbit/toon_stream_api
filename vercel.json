@@ -1,43 +1,36 @@
 {
-  "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/*.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/home",
-      "dest": "/api/index.js"
+      "source": "/home",
+      "destination": "/api/index"
     },
     {
-      "src": "/series/page/(.*)",
-      "dest": "/api/series_page.js?page=$1"
+      "source": "/series/page/:page",
+      "destination": "/api/series_page?page=:page"
     },
     {
-      "src": "/series",
-      "dest": "/api/series_page.js"
+      "source": "/series",
+      "destination": "/api/series_page"
     },
     {
-      "src": "/movies/page/(.*)",
-      "dest": "/api/movies_page.js?page=$1"
+      "source": "/movies/page/:page",
+      "destination": "/api/movies_page?page=:page"
     },
     {
-      "src": "/movies",
-      "dest": "/api/movies_page.js"
+      "source": "/movies",
+      "destination": "/api/movies_page"
     },
     {
-      "src": "/api/proxy",
-      "dest": "/api/proxy.js"
+      "source": "/api/proxy",
+      "destination": "/api/proxy"
     },
     {
-      "src": "/(.*)",
-      "dest": "/api/proxy.js?path=/$1"
+      "source": "/:path*",
+      "destination": "/api/proxy?path=/:path*"
     }
   ],
   "functions": {
-    "api/*.js": {
+    "api/**/*.js": {
       "memory": 1024,
       "maxDuration": 30
     }
