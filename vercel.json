@@ -21,6 +21,10 @@
       "destination": "/api/movies_page?page=:page"
     },
     {
+      "source": "/movies/:path",
+      "destination": "/api/movies?path=:path"
+    },
+    {
       "source": "/movies",
       "destination": "/api/movies_page"
     },
