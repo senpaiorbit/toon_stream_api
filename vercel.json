@@ -9,6 +9,14 @@
       "destination": "/api/index"
     },
     {
+      "source": "/category/:category/page/:page",
+      "destination": "/api/category?category=:category&page=:page"
+    },
+    {
+      "source": "/category/:category",
+      "destination": "/api/category?category=:category"
+    },
+    {
       "source": "/series/page/:page",
       "destination": "/api/series_page?page=:page"
     },
