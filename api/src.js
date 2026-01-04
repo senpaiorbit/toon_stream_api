@@ -8,48 +8,52 @@ export default async function handler(req) {
 
   try {
     const res = await fetch(target, {
+      redirect: "follow",
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html,*/*"
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "upgrade-insecure-requests": "1",
+        "sec-fetch-site": "none",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-user": "?1",
+        "sec-fetch-dest": "document"
       }
     });
 
-    const html = await res.text();
+    let html = await res.text();
 
-    // Normalize broken HTML (ScraperAPI/Cloudflare fix)
-    const clean = html
-      .replace(/[\n\r\t]/g,' ')
-      .replace(/\s+/g,' ')
-      .toLowerCase();
+    // HARD decode & normalize (Cloudflare + ScraperAPI safe)
+    html = decodeURIComponent(escape(html))
+      .replace(/<!--[\s\S]*?-->/g,'')
+      .replace(/\s+/g,' ');
 
-    // Multi-iframe safe extractor
-    const matches = [...clean.matchAll(/<iframe[^>]*src\s*=\s*["']([^"']+)["']/gi)];
+    // iframe src extractor (super tolerant)
+    const m = html.match(/<iframe[\s\S]*?src\s*=\s*["']([^"']+)["']/i);
 
-    if (!matches.length) return respond({ ok:false, url:null });
-
-    // First real iframe
-    let url = matches[0][1];
-
-    // Absolute URL fix
-    if (url.startsWith("//")) url = "https:" + url;
-    if (url.startsWith("/")) {
-      const base = new URL(target);
-      url = base.origin + url;
-    }
-
-    return respond({ ok:true, url });
+    return respond({
+      ok: !!m,
+      url: m ? absolutize(m[1], target) : null
+    });
 
   } catch(e) {
     return respond({ ok:false, url:null, error:"FETCH_FAIL" });
   }
 }
 
+function absolutize(u, base){
+  if(u.startsWith("//")) return "https:"+u;
+  if(u.startsWith("/")) return new URL(base).origin + u;
+  return u;
+}
+
 function respond(data){
   return new Response(JSON.stringify(data),{
     headers:{
       "content-type":"application/json",
-      "access-control-allow-origin":"*",
-      "cache-control":"no-store"
+      "access-control-allow-origin":"*"
     }
   });
 }
