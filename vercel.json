@@ -9,6 +9,22 @@
       "destination": "/api/index"
     },
     {
+      "source": "/home/search/:query",
+      "destination": "/api/search?q=:query"
+    },
+    {
+      "source": "/home/search/:query/",
+      "destination": "/api/search?q=:query"
+    },
+    {
+      "source": "/search/:query",
+      "destination": "/api/search?q=:query"
+    },
+    {
+      "source": "/search/:query/",
+      "destination": "/api/search?q=:query"
+    },
+    {
       "source": "/home/letter/:letter/page/:page",
       "destination": "/api/letter?letter=:letter&page=:page"
     },
