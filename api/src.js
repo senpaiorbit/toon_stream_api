@@ -1,71 +1,55 @@
-const axios = require('axios');
-const cheerio = require('cheerio');
+export const config = { runtime: "edge" };
 
-module.exports = async (req, res) => {
-  // Enable CORS
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+export default async function handler(req) {
+  const { searchParams } = new URL(req.url);
+  const target = searchParams.get("url");
 
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  // Only allow GET requests
-  if (req.method !== 'GET') {
-    return res.status(405).json({
-      ok: false,
-      error: 'Method not allowed'
-    });
-  }
-
-  // Get URL from query parameter
-  const { url } = req.query;
-
-  // Validate URL parameter
-  if (!url) {
-    return res.status(400).json({
-      ok: false,
-      error: 'Missing url parameter'
-    });
-  }
+  if (!target) return respond({ ok:false, url:null, error:"NO_URL" });
 
   try {
-    // Fetch the page
-    const response = await axios.get(url, {
+    const res = await fetch(target, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
-      timeout: 10000
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,*/*"
+      }
     });
 
-    // Load HTML into cheerio
-    const $ = cheerio.load(response.data);
+    const html = await res.text();
 
-    // Find iframe src
-    const iframeSrc = $('iframe').attr('src');
+    // Normalize broken HTML (ScraperAPI/Cloudflare fix)
+    const clean = html
+      .replace(/[\n\r\t]/g,' ')
+      .replace(/\s+/g,' ')
+      .toLowerCase();
 
-    if (iframeSrc) {
-      return res.status(200).json({
-        ok: true,
-        url: iframeSrc
-      });
-    } else {
-      return res.status(404).json({
-        ok: false,
-        error: 'No iframe found on the page'
-      });
+    // Multi-iframe safe extractor
+    const matches = [...clean.matchAll(/<iframe[^>]*src\s*=\s*["']([^"']+)["']/gi)];
+
+    if (!matches.length) return respond({ ok:false, url:null });
+
+    // First real iframe
+    let url = matches[0][1];
+
+    // Absolute URL fix
+    if (url.startsWith("//")) url = "https:" + url;
+    if (url.startsWith("/")) {
+      const base = new URL(target);
+      url = base.origin + url;
     }
 
-  } catch (error) {
-    console.error('Scraping error:', error.message);
-    
-    return res.status(500).json({
-      ok: false,
-      error: error.message || 'Failed to scrape the page'
-    });
+    return respond({ ok:true, url });
+
+  } catch(e) {
+    return respond({ ok:false, url:null, error:"FETCH_FAIL" });
   }
-};
+}
+
+function respond(data){
+  return new Response(JSON.stringify(data),{
+    headers:{
+      "content-type":"application/json",
+      "access-control-allow-origin":"*",
+      "cache-control":"no-store"
+    }
+  });
+}
