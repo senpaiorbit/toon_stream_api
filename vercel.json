@@ -25,6 +25,14 @@
       "destination": "/api/search?q=:query"
     },
     {
+  "source": "/series/:slug",
+  "destination": "/api/series?slug=:slug"
+},
+{
+  "source": "/series/:slug/",
+  "destination": "/api/series?slug=:slug"
+},
+    {
       "source": "/home/letter/:letter/page/:page",
       "destination": "/api/letter?letter=:letter&page=:page"
     },
