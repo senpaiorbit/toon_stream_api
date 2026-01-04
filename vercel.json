@@ -29,6 +29,14 @@
       "destination": "/api/movies_page"
     },
     {
+      "source": "/letter/:letter/page/:page",
+      "destination": "/api/letter?letter=:letter&page=:page"
+    },
+    {
+      "source": "/letter/:letter",
+      "destination": "/api/letter?letter=:letter"
+    },
+    {
       "source": "/api/proxy",
       "destination": "/api/proxy"
     },
