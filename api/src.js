@@ -1,35 +1,50 @@
+import axios from "axios";
+import * as cheerio from "cheerio";
+
 export default async function handler(req, res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Content-Type", "application/json");
+
   const target = req.query.url;
-  if (!target) return res.json({ ok:false, url:null });
+
+  if (!target) {
+    return res.status(400).json({
+      ok: false,
+      error: "Missing ?url="
+    });
+  }
 
   try {
-    const r = await fetch(target, {
-      redirect: "follow",
+    const { data } = await axios.get(target, {
+      timeout: 10000,
       headers: {
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "accept-language": "en-US,en;q=0.9",
-        "cache-control": "no-cache",
-        "pragma": "no-cache"
+        "User-Agent": "Mozilla/5.0",
+        "Referer": target
       }
     });
 
-    let html = await r.text();
+    const $ = cheerio.load(data);
 
-    // Normalize polluted HTML
-    html = html.replace(/\s+/g," ").replace(/<!--.*?-->/g,"");
+    // grab iframe src
+    let iframe = $("iframe").first().attr("src");
 
-    const m = html.match(/<iframe[\s\S]*?src\s*=\s*["']([^"']+)["']/i);
+    if (!iframe) {
+      return res.json({ ok: false, error: "No iframe found" });
+    }
 
-    if(!m) return res.json({ ok:false, url:null });
+    // absolute fix
+    if (iframe.startsWith("//")) iframe = "https:" + iframe;
+    if (iframe.startsWith("/")) iframe = new URL(iframe, target).href;
 
-    let url = m[1];
-    if(url.startsWith("//")) url = "https:"+url;
-    if(url.startsWith("/")) url = new URL(target).origin + url;
+    return res.json({
+      ok: true,
+      url: iframe
+    });
 
-    return res.json({ ok:true, url });
-
-  } catch(e){
-    return res.json({ ok:false, url:null });
+  } catch (err) {
+    return res.status(500).json({
+      ok: false,
+      error: "Scrape failed"
+    });
   }
 }
