@@ -265,17 +265,20 @@ function scrapeSchedule($) {
 }
 
 // Main scraper function
-async function scrapeCategoryPage(baseUrl, categorySlug, pageNumber = 1, contentType = null) {
+async function scrapeCategoryPage(baseUrl, categoryPath, pageNumber = 1, contentType = null) {
   try {
+    // Remove leading/trailing slashes from categoryPath
+    categoryPath = categoryPath.replace(/^\/+|\/+$/g, '');
+    
     let categoryUrl;
     if (pageNumber === 1 && !contentType) {
-      categoryUrl = `${baseUrl}/category/${categorySlug}/`;
+      categoryUrl = `${baseUrl}/category/${categoryPath}/`;
     } else if (pageNumber === 1 && contentType) {
-      categoryUrl = `${baseUrl}/category/${categorySlug}/?type=${contentType}`;
+      categoryUrl = `${baseUrl}/category/${categoryPath}/?type=${contentType}`;
     } else if (pageNumber > 1 && !contentType) {
-      categoryUrl = `${baseUrl}/category/${categorySlug}/page/${pageNumber}/`;
+      categoryUrl = `${baseUrl}/category/${categoryPath}/page/${pageNumber}/`;
     } else {
-      categoryUrl = `${baseUrl}/category/${categorySlug}/page/${pageNumber}/?type=${contentType}`;
+      categoryUrl = `${baseUrl}/category/${categoryPath}/page/${pageNumber}/?type=${contentType}`;
     }
     
     console.log(`Scraping: ${categoryUrl}`);
@@ -296,7 +299,7 @@ async function scrapeCategoryPage(baseUrl, categorySlug, pageNumber = 1, content
       baseUrl: baseUrl,
       pageUrl: categoryUrl,
       pageType: 'category',
-      category: categorySlug,
+      categoryPath: categoryPath,
       categoryTitle: pageTitle,
       pageNumber: pageNumber,
       contentTypeFilter: contentType || 'all',
@@ -371,13 +374,13 @@ module.exports = async (req, res) => {
       });
     }
     
-    // Get category from query parameter
-    const category = req.query.category;
+    // Get category path from query parameter
+    const categoryPath = req.query.path;
     
-    if (!category) {
+    if (!categoryPath) {
       return res.status(400).json({
         success: false,
-        error: 'Category parameter is required. Use ?category=crunchyroll'
+        error: 'Category path is required. Use ?path=crunchyroll or ?path=language/hindi-language'
       });
     }
     
@@ -400,7 +403,7 @@ module.exports = async (req, res) => {
       });
     }
     
-    const result = await scrapeCategoryPage(baseUrl, category, pageNumber, contentType);
+    const result = await scrapeCategoryPage(baseUrl, categoryPath, pageNumber, contentType);
     
     if (!result.success && result.statusCode === 404) {
       return res.status(404).json(result);
