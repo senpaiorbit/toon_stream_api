@@ -1,41 +1,83 @@
-import axios from "axios";
-import cheerio from "cheerio";
+// api/scrape.js
 
 export default async function handler(req, res) {
+  // Enable CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // Get URL from query parameter
+  const { url } = req.query;
+
+  if (!url) {
+    return res.status(400).json({
+      ok: false,
+      url: null,
+      error: 'URL parameter is required'
+    });
+  }
+
   try {
-    const target = req.query.url;
-    if (!target) return res.json({ ok: false, error: "NO_URL" });
-
-    const response = await axios.get(target, {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html"
-      },
-      timeout: 20000
-    });
-
-    const $ = cheerio.load(response.data);
-
-    let finalUrl = null;
-
-    $("iframe").each((i, el) => {
-      const src = $(el).attr("src");
-      if (src && !finalUrl) finalUrl = src;
-    });
-
-    if (!finalUrl) {
-      // Try fallback: JS embedded iframe
-      const html = response.data;
-      const jsMatch = html.match(/src\s*:\s*["']([^"']+)["']/i);
-      if (jsMatch) finalUrl = jsMatch[1];
+    // Validate URL
+    let targetUrl;
+    try {
+      targetUrl = new URL(url);
+    } catch (e) {
+      return res.status(400).json({
+        ok: false,
+        url: null,
+        error: 'Invalid URL format'
+      });
     }
 
-    res.json({
-      ok: !!finalUrl,
-      url: finalUrl
+    // Fetch the page
+    const response = await fetch(targetUrl.href, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache'
+      },
+      redirect: 'follow'
     });
 
-  } catch (e) {
-    res.json({ ok: false, error: "FETCH_FAILED" });
+    if (!response.ok) {
+      return res.status(response.status).json({
+        ok: false,
+        url: null,
+        error: `HTTP error ${response.status}`
+      });
+    }
+
+    // Get HTML content
+    const html = await response.text();
+
+    // Extract iframe src using regex (no dependencies)
+    const iframeRegex = /<iframe[^>]+src=["']([^"']+)["']/i;
+    const match = html.match(iframeRegex);
+
+    if (match && match[1]) {
+      return res.status(200).json({
+        ok: true,
+        url: match[1]
+      });
+    } else {
+      return res.status(200).json({
+        ok: false,
+        url: null,
+        error: 'No iframe found'
+      });
+    }
+
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      url: null,
+      error: error.message || 'Failed to scrape'
+    });
   }
 }
