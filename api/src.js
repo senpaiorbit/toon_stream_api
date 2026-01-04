@@ -1,54 +1,41 @@
-export const config = { runtime: "edge" };
+import axios from "axios";
+import cheerio from "cheerio";
 
-export default async function handler(req) {
+export default async function handler(req, res) {
   try {
-    const q = new URL(req.url).searchParams;
-    const target = q.get("url");
-    if (!target) return j({ ok:false, error:"NO_URL" });
+    const target = req.query.url;
+    if (!target) return res.json({ ok: false, error: "NO_URL" });
 
-    const r = await fetch(target, {
+    const response = await axios.get(target, {
       headers: {
         "User-Agent": "Mozilla/5.0",
-        "Accept": "*/*",
-        "Referer": target
-      }
+        "Accept": "text/html"
+      },
+      timeout: 20000
     });
 
-    let html = await r.text();
+    const $ = cheerio.load(response.data);
 
-    // Decode escaped HTML if any
-    html = html.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+    let finalUrl = null;
 
-    // All possible iframe locations
-    let m =
-      html.match(/<iframe[^>]+src=["']([^"']+)["']/i) ||
-      html.match(/data-src=["']([^"']+)["']/i) ||
-      html.match(/embedUrl["']?\s*:\s*["']([^"']+)["']/i) ||
-      html.match(/src:\s*["']([^"']+)["']/i);
+    $("iframe").each((i, el) => {
+      const src = $(el).attr("src");
+      if (src && !finalUrl) finalUrl = src;
+    });
 
-    if (!m) return j({ ok:false, url:null });
+    if (!finalUrl) {
+      // Try fallback: JS embedded iframe
+      const html = response.data;
+      const jsMatch = html.match(/src\s*:\s*["']([^"']+)["']/i);
+      if (jsMatch) finalUrl = jsMatch[1];
+    }
 
-    // Resolve redirect (short.icu, etc.)
-    let real = m[1];
-    if (real.startsWith("//")) real = "https:" + real;
-
-    try {
-      const head = await fetch(real, { redirect:"follow" });
-      real = head.url;
-    } catch {}
-
-    return j({ ok:true, url: real });
+    res.json({
+      ok: !!finalUrl,
+      url: finalUrl
+    });
 
   } catch (e) {
-    return j({ ok:false, error:"FAILED" });
+    res.json({ ok: false, error: "FETCH_FAILED" });
   }
-}
-
-function j(d){
-  return new Response(JSON.stringify(d),{
-    headers:{
-      "content-type":"application/json",
-      "access-control-allow-origin":"*"
-    }
-  });
 }
