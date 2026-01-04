@@ -47,10 +47,6 @@
     {
       "source": "/api/proxy",
       "destination": "/api/proxy"
-    },
-    {
-      "source": "/:path*",
-      "destination": "/api/proxy?path=/:path*"
     }
   ],
   "functions": {
