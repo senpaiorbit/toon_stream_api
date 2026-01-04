@@ -25,6 +25,54 @@
       "destination": "/api/letter?letter=:letter"
     },
     {
+      "source": "/home/cast_tv/:cast/page/:page",
+      "destination": "/api/cast?cast=:cast&page=:page"
+    },
+    {
+      "source": "/home/cast_tv/:cast/page/:page/",
+      "destination": "/api/cast?cast=:cast&page=:page"
+    },
+    {
+      "source": "/home/cast_tv/:cast",
+      "destination": "/api/cast?cast=:cast"
+    },
+    {
+      "source": "/home/cast_tv/:cast/",
+      "destination": "/api/cast?cast=:cast"
+    },
+    {
+      "source": "/home/cast/:cast/page/:page",
+      "destination": "/api/cast?cast=:cast&page=:page"
+    },
+    {
+      "source": "/home/cast/:cast/page/:page/",
+      "destination": "/api/cast?cast=:cast&page=:page"
+    },
+    {
+      "source": "/home/cast/:cast",
+      "destination": "/api/cast?cast=:cast"
+    },
+    {
+      "source": "/home/cast/:cast/",
+      "destination": "/api/cast?cast=:cast"
+    },
+    {
+      "source": "/cast/:cast/page/:page",
+      "destination": "/api/cast?cast=:cast&page=:page"
+    },
+    {
+      "source": "/cast/:cast/page/:page/",
+      "destination": "/api/cast?cast=:cast&page=:page"
+    },
+    {
+      "source": "/cast/:cast",
+      "destination": "/api/cast?cast=:cast"
+    },
+    {
+      "source": "/cast/:cast/",
+      "destination": "/api/cast?cast=:cast"
+    },
+    {
       "source": "/category/:path+/page/:page",
       "destination": "/api/category?path=:path&page=:page"
     },
