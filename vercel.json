@@ -1,23 +1,51 @@
 {
   "rewrites": [
     {
-      "source": "/",
-      "destination": "/api/index"
-    },
-    {
       "source": "/home",
       "destination": "/api/index"
     },
     {
-      "source": "/category/:category/page/:page",
-      "destination": "/api/category?category=:category&page=:page"
+      "source": "/home/",
+      "destination": "/api/index"
     },
     {
-      "source": "/category/:category",
-      "destination": "/api/category?category=:category"
+      "source": "/home/letter/:letter/page/:page",
+      "destination": "/api/letter?letter=:letter&page=:page"
+    },
+    {
+      "source": "/home/letter/:letter/page/:page/",
+      "destination": "/api/letter?letter=:letter&page=:page"
+    },
+    {
+      "source": "/home/letter/:letter",
+      "destination": "/api/letter?letter=:letter"
+    },
+    {
+      "source": "/home/letter/:letter/",
+      "destination": "/api/letter?letter=:letter"
+    },
+    {
+      "source": "/category/:path+/page/:page",
+      "destination": "/api/category?path=:path&page=:page"
+    },
+    {
+      "source": "/category/:path+/page/:page/",
+      "destination": "/api/category?path=:path&page=:page"
+    },
+    {
+      "source": "/category/:path+",
+      "destination": "/api/category?path=:path"
+    },
+    {
+      "source": "/category/:path+/",
+      "destination": "/api/category?path=:path"
     },
     {
       "source": "/series/page/:page",
+      "destination": "/api/series_page?page=:page"
+    },
+    {
+      "source": "/series/page/:page/",
       "destination": "/api/series_page?page=:page"
     },
     {
@@ -25,7 +53,15 @@
       "destination": "/api/series_page"
     },
     {
+      "source": "/series/",
+      "destination": "/api/series_page"
+    },
+    {
       "source": "/movies/page/:page",
+      "destination": "/api/movies_page?page=:page"
+    },
+    {
+      "source": "/movies/page/:page/",
       "destination": "/api/movies_page?page=:page"
     },
     {
@@ -33,20 +69,24 @@
       "destination": "/api/movies?path=:path"
     },
     {
+      "source": "/movies/:path/",
+      "destination": "/api/movies?path=:path"
+    },
+    {
       "source": "/movies",
       "destination": "/api/movies_page"
     },
     {
-      "source": "/letter/:letter/page/:page",
-      "destination": "/api/letter?letter=:letter&page=:page"
-    },
-    {
-      "source": "/letter/:letter",
-      "destination": "/api/letter?letter=:letter"
+      "source": "/movies/",
+      "destination": "/api/movies_page"
     },
     {
       "source": "/api/proxy",
       "destination": "/api/proxy"
+    },
+    {
+      "source": "/:path*",
+      "destination": "/api/proxy?path=/:path*"
     }
   ],
   "functions": {
@@ -54,5 +94,6 @@
       "memory": 1024,
       "maxDuration": 30
     }
-  }
+  },
+  "trailingSlash": false
 }
