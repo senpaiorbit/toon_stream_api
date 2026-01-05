@@ -1,4 +1,23 @@
 # ToonStream API Scraper
+<p align="center">
+    <a href="https://github.com/senpaiorbit/toon_stream_api">
+        <img 
+            src="https://raw.githubusercontent.com/ghoshRitesh12/aniwatch-api/refs/heads/main/public/img/hianime_v2.png" 
+            alt="aniwatch_logo" 
+            width="175" 
+            height="175"
+            decoding="async"
+            fetchpriority="high"
+        />
+    </a>
+</p>
+
+# <p align="center">Toonstream API</p>
+
+<div align="center">
+    A free RESTful API serving anime information from <a href="https://toonsteam.one" target="_blank">toonstream.one</a>
+
+  <br/>
 
 A comprehensive Vercel serverless API for scraping anime and cartoon content from ToonStream. This API provides structured data for series, movies, episodes, categories, cast members, and search functionality.
 
