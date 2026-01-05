@@ -40,7 +40,7 @@ A comprehensive Vercel serverless API for scraping anime and cartoon content fro
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/toonstream-api.git
+git clone https://github.com/senpaiorbit/toon_stream_api.git
 cd toonstream-api
 ```
 
