@@ -695,3 +695,6 @@ For issues and questions:
 
 Made with ❤️ by tanbirst1st1 
 (https://github.com/senpaiorbit)
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=senpaiorbit/toon_stream_api&type=date&legend=top-left)](https://www.star-history.com/#senpaiorbit/toon_stream_api&type=date&legend=top-left)
