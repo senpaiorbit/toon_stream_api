@@ -695,6 +695,6 @@ For issues and questions:
 
 Made with ❤️ by tanbirst1st1 
 (https://github.com/senpaiorbit)
-## Star History
+## Stargazers over time
+[![Stargazers over time](https://starchart.cc/senpaiorbit/toon_stream_api.svg?variant=adaptive)](https://starchart.cc/senpaiorbit/toon_stream_api)
 
-[![Star History Chart](https://api.star-history.com/svg?repos=senpaiorbit/toon_stream_api&type=date&legend=top-left)](https://www.star-history.com/#senpaiorbit/toon_stream_api&type=date&legend=top-left)
