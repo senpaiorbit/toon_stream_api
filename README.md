@@ -1,6 +1,6 @@
 # ToonStream API Scraper
 <div>
-<p align="center">
+<p align="">
     <a href="https://github.com/senpaiorbit/toon_stream_api">
         <img 
             src="https://raw.githubusercontent.com/ghoshRitesh12/aniwatch-api/refs/heads/main/public/img/hianime_v2.png" 
