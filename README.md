@@ -15,7 +15,7 @@
 </div>
 # <p align="center">Toonstream API</p>
 
-<div align="center">
+<div align="">
     A free RESTful API serving anime information from <a href="https://toonsteam.one" target="_blank">toonstream.one</a>
 
   <br/>
