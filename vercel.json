@@ -39,7 +39,7 @@
 {
   "source": "/episode/:slug/",
   "destination": "/api/episode?slug=:slug"
-}
+},
     {
       "source": "/home/letter/:letter/page/:page",
       "destination": "/api/letter?letter=:letter&page=:page"
