@@ -1,4 +1,5 @@
 # ToonStream API Scraper
+<div>
 <p align="center">
     <a href="https://github.com/senpaiorbit/toon_stream_api">
         <img 
@@ -11,7 +12,7 @@
         />
     </a>
 </p>
-
+</div>
 # <p align="center">Toonstream API</p>
 
 <div align="center">
