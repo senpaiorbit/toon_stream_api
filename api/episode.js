@@ -33,6 +33,7 @@ function parseServers(serverParam, totalServers) {
   for (const part of parts) {
     const trimmed = part.trim();
     
+    // Range: 0-4
     if (trimmed.includes('-')) {
       const [start, end] = trimmed.split('-').map(n => parseInt(n.trim()));
       if (!isNaN(start) && !isNaN(end)) {
@@ -40,7 +41,9 @@ function parseServers(serverParam, totalServers) {
           if (!servers.includes(i)) servers.push(i);
         }
       }
-    } else {
+    }
+    // Single number: 3
+    else {
       const num = parseInt(trimmed);
       if (!isNaN(num) && !servers.includes(num)) {
         servers.push(num);
@@ -49,6 +52,18 @@ function parseServers(serverParam, totalServers) {
   }
   
   return servers.sort((a, b) => a - b);
+}
+
+// Parse server name query
+function parseServerNames(serverParam) {
+  if (!serverParam) return null;
+  
+  if (serverParam.toLowerCase() === 'all') {
+    return 'all';
+  }
+  
+  // Split by comma and trim
+  return serverParam.split(',').map(s => s.trim().toLowerCase());
 }
 
 // Scrape episode metadata
@@ -61,10 +76,7 @@ function scrapeEpisodeMetadata($) {
     description: $article.find('.description').text().trim(),
     duration: $article.find('.duration').text().replace('min', '').trim(),
     year: $article.find('.year').text().trim(),
-    rating: $('.vote .num').text().trim(),
-    categories: [],
-    cast: [],
-    navigation: {}
+    rating: $('.vote .num').text().trim()
   };
 }
 
@@ -118,7 +130,7 @@ function scrapeNavigation($) {
 }
 
 // Extract servers/iframes
-function scrapeServers($, requestedServers) {
+function scrapeServers($) {
   const servers = [];
   let serverIndex = 0;
   
@@ -145,6 +157,7 @@ function scrapeServers($, requestedServers) {
     const serverNum = parseInt($btn.find('span').first().text()) - 1;
     const serverName = $btn.find('.server').text()
       .replace('-Multi Audio', '')
+      .replace('Multi Audio', '')
       .trim();
     
     if (servers[serverNum]) {
@@ -154,43 +167,32 @@ function scrapeServers($, requestedServers) {
     }
   });
   
-  // Filter by requested servers
-  if (requestedServers && requestedServers.length > 0) {
-    return servers.filter(s => requestedServers.includes(s.serverNumber));
-  }
-  
   return servers;
 }
 
-// Extract available seasons
-function scrapeAvailableSeasons($) {
-  const seasons = [];
-  $('.choose-season .sel-temp a').each((i, el) => {
-    const $el = $(el);
-    seasons.push({
-      seasonNumber: parseInt($el.attr('data-season')) || 0,
-      name: $el.text().trim()
-    });
-  });
-  return seasons;
-}
-
-// Extract season episodes
-function scrapeSeasonEpisodes($) {
-  const episodes = [];
-  $('#episode_by_temp li').each((i, el) => {
-    const $el = $(el);
-    const $article = $el.find('article');
-    
-    episodes.push({
-      episodeNumber: $article.find('.num-epi').text().trim(),
-      title: $article.find('.entry-title').text().trim(),
-      image: extractImageUrl($article.find('img').attr('src')),
-      time: $article.find('.time').text().trim(),
-      url: $article.find('.lnk-blk').attr('href')
-    });
-  });
-  return episodes;
+// Filter servers by query
+function filterServers(servers, serverQuery) {
+  if (!serverQuery) return servers;
+  
+  // Try parsing as numbers first
+  const requestedNumbers = parseServers(serverQuery, servers.length);
+  if (requestedNumbers && requestedNumbers.length > 0) {
+    return servers.filter(s => requestedNumbers.includes(s.serverNumber));
+  }
+  
+  // Try parsing as names
+  const requestedNames = parseServerNames(serverQuery);
+  if (requestedNames === 'all') {
+    return servers;
+  }
+  
+  if (requestedNames && requestedNames.length > 0) {
+    return servers.filter(s => 
+      requestedNames.some(name => s.name.toLowerCase().includes(name))
+    );
+  }
+  
+  return servers;
 }
 
 // Main scraper
@@ -200,15 +202,15 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
     console.log(`Scraping: ${episodeUrl}`);
     
     const response = await axios.get(episodeUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
       timeout: 30000
     });
     
     const $ = cheerio.load(response.data);
     
     const metadata = scrapeEpisodeMetadata($);
-    const allServers = scrapeServers($, null);
-    const requestedServers = parseServers(serverQuery, allServers.length);
+    const allServers = scrapeServers($);
+    const filteredServers = filterServers(allServers, serverQuery);
     
     const data = {
       baseUrl,
@@ -220,22 +222,17 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
       categories: scrapeCategories($),
       cast: scrapeCast($),
       navigation: scrapeNavigation($),
-      availableSeasons: scrapeAvailableSeasons($),
-      seasonEpisodes: scrapeSeasonEpisodes($),
-      servers: requestedServers ? 
-        scrapeServers($, requestedServers) : 
-        allServers
+      servers: filteredServers
     };
     
     return {
       success: true,
       data,
       stats: {
-        totalServers: allServers.length,
-        returnedServers: data.servers.length,
+        totalServersAvailable: allServers.length,
+        serversReturned: filteredServers.length,
         castCount: data.cast.length,
-        categoriesCount: data.categories.length,
-        seasonEpisodesCount: data.seasonEpisodes.length
+        categoriesCount: data.categories.length
       }
     };
     
@@ -251,6 +248,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
   
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -258,20 +256,20 @@ module.exports = async (req, res) => {
   }
   
   if (req.method !== 'GET') {
-    return res.status(405).json({ success: false, error: 'Method not allowed' });
+    return res.status(405).json({ success: false, error: 'Method not allowed. Use GET request.' });
   }
   
   try {
     const baseUrl = getBaseUrl();
     if (!baseUrl) {
-      return res.status(500).json({ success: false, error: 'Base URL not found' });
+      return res.status(500).json({ success: false, error: 'Base URL not found. Please check src/baseurl.txt file.' });
     }
     
     const episodeSlug = req.query.slug || req.query.episode;
     if (!episodeSlug) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Episode slug required. Use ?slug=attack-on-titan-2x1 or ?slug=attack-on-titan-2x1&server=1,2,3'
+        error: 'Episode slug required. Examples: ?slug=attack-on-titan-2x1 or ?slug=attack-on-titan-2x1&server=0,1,2'
       });
     }
     
@@ -286,6 +284,7 @@ module.exports = async (req, res) => {
     res.status(result.success ? 200 : 500).json(result);
     
   } catch (error) {
+    console.error('Handler error:', error);
     res.status(500).json({ 
       success: false, 
       error: 'Internal server error', 
