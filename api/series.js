@@ -27,6 +27,10 @@ function parseSeasons(seasonsParam) {
     return 'all';
   }
   
+  if (seasonsParam.toLowerCase() === 'latest') {
+    return 'latest';
+  }
+  
   const seasons = [];
   const parts = seasonsParam.split(',');
   
@@ -282,6 +286,10 @@ async function scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, s
     
     if (requestedSeasons === 'all') {
       requestedSeasons = metadata.availableSeasons.map(s => s.seasonNumber);
+    } else if (requestedSeasons === 'latest') {
+      // Get the highest season number (latest season)
+      const latestSeason = Math.max(...metadata.availableSeasons.map(s => s.seasonNumber));
+      requestedSeasons = [latestSeason];
     }
     
     // Validate requested seasons
@@ -380,7 +388,7 @@ module.exports = async (req, res) => {
     if (!seriesSlug) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Series slug required. Use ?slug=attack-on-titan&seasons=1,2 or ?slug=attack-on-titan&seasons=all&src=true&server=0,1,2' 
+        error: 'Series slug required. Use ?slug=attack-on-titan&seasons=1,2 or ?slug=attack-on-titan&seasons=all or ?slug=attack-on-titan&seasons=latest&src=true&server=0,1,2' 
       });
     }
     
