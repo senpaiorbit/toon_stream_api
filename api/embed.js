@@ -1,59 +1,136 @@
 export const config = {
-  runtime: "edge",
+  runtime: 'edge',
 };
 
 export default async function handler(request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const target = searchParams.get("url");
+  // Set CORS headers
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
 
-    if (!target) {
+  // Handle preflight request
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: corsHeaders,
+    });
+  }
+
+  try {
+    // Get URL from query parameter
+    const { searchParams } = new URL(request.url);
+    const targetUrl = searchParams.get('url');
+
+    if (!targetUrl) {
       return new Response(
-        JSON.stringify({ error: "Missing ?url= parameter" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
+        JSON.stringify({ 
+          error: 'Missing url parameter',
+          usage: '?url={full_url}' 
+        }),
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        }
       );
     }
 
-    const res = await fetch(target, {
+    // Validate URL
+    let validUrl;
+    try {
+      validUrl = new URL(targetUrl);
+    } catch (e) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid URL provided' }),
+        {
+          status: 400,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    }
+
+    // Fetch the target page
+    const response = await fetch(validUrl.href, {
       headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept":
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://toonstream.one/",
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
     });
 
-    const html = await res.text();
-
-    const iframeMatch = html.match(/<iframe[^>]+src="([^"]+)"/);
-    const videoEmbed = iframeMatch ? iframeMatch[1] : null;
-
-    const adMatch = html.match(/window\.open\("([^"]+)"/);
-    const adRedirect = adMatch ? adMatch[1] : null;
-
-    return new Response(
-      JSON.stringify(
+    if (!response.ok) {
+      return new Response(
+        JSON.stringify({ 
+          error: `Failed to fetch page: ${response.status} ${response.statusText}` 
+        }),
         {
-          source: target,
-          video_embed: videoEmbed,
-          ad_redirect: adRedirect,
-        },
-        null,
-        2
-      ),
+          status: response.status,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    }
+
+    const html = await response.text();
+
+    // Extract iframe src using regex
+    const iframeRegex = /<iframe[^>]+src=["']([^"']+)["'][^>]*>/i;
+    const match = html.match(iframeRegex);
+
+    if (!match || !match[1]) {
+      return new Response(
+        JSON.stringify({ 
+          error: 'No iframe found in the page',
+          html: html.substring(0, 500) // Return first 500 chars for debugging
+        }),
+        {
+          status: 404,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    }
+
+    const iframeSrc = match[1];
+
+    // Return the iframe source
+    return new Response(
+      JSON.stringify({
+        success: true,
+        iframe_src: iframeSrc,
+        original_url: targetUrl,
+      }),
       {
+        status: 200,
         headers: {
-          "Content-Type": "application/json",
-          "Access-Control-Allow-Origin": "*",
+          ...corsHeaders,
+          'Content-Type': 'application/json',
         },
       }
     );
-  } catch (err) {
+
+  } catch (error) {
     return new Response(
-      JSON.stringify({ error: err.message }),
-      { status: 500 }
+      JSON.stringify({ 
+        error: 'Internal server error',
+        message: error.message 
+      }),
+      {
+        status: 500,
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+        },
+      }
     );
   }
 }
