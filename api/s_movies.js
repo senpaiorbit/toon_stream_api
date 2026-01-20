@@ -4,8 +4,7 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
-// Utility Functions
-const getBaseUrl = () => {
+function getBaseUrl() {
   try {
     const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
     return fs.readFileSync(baseUrlPath, 'utf-8').trim();
@@ -13,66 +12,150 @@ const getBaseUrl = () => {
     console.error('Error reading baseurl.txt:', error);
     return null;
   }
-};
+}
 
-const normalizeImageUrl = (imgSrc) => {
+function extractImageUrl(imgSrc) {
   if (!imgSrc) return null;
-  return imgSrc.startsWith('//') ? `https:${imgSrc}` : imgSrc;
-};
+  return imgSrc.startsWith('//') ? 'https:' + imgSrc : imgSrc;
+}
 
-const extractSlugFromUrl = (url) => {
-  if (!url) return '';
-  const match = url.match(/\/([^\/]+)\/?$/);
-  return match ? match[1] : '';
-};
-
-// Main Scraping Functions
-const scrapeMovies = ($) => {
+// --- MOVIE SCRAPER ---
+function scrapeMovies($) {
   const movies = [];
-  
-  $('.section.movies .post-lst li').each((index, element) => {
+
+  $('.section.movies .post-lst li').each((_, element) => {
     const $elem = $(element);
-    const url = $elem.find('.lnk-blk').attr('href') || '';
-    
+    const $link = $elem.find('.lnk-blk');
+    const $img = $elem.find('img');
+    const $title = $elem.find('.entry-title');
+
     movies.push({
-      id: extractSlugFromUrl(url),
-      title: $elem.find('.entry-title').text().trim(),
-      url: url,
-      poster: normalizeImageUrl($elem.find('img').attr('src'))
+      id: ($elem.attr('id') || '').replace(/^post-/, ''),
+      title: $title.text().trim(),
+      url: $link.attr('href') || '',
+      poster: extractImageUrl($img.attr('src'))
     });
   });
-  
-  return movies;
-};
 
-const scrapePagination = ($) => {
+  return movies;
+}
+
+// --- CLEAN PAGINATION ---
+function scrapePagination($) {
   let currentPage = 1;
   let totalPages = 1;
   let hasNextPage = false;
   let hasPrevPage = false;
-  
-  $('.navigation.pagination .nav-links a, .navigation.pagination .nav-links span').each((index, element) => {
-    const $elem = $(element);
-    const text = $elem.text().trim();
-    
-    if ($elem.hasClass('current')) {
+
+  $('.navigation.pagination .nav-links a').each((_, el) => {
+    const $el = $(el);
+    const text = $el.text().trim();
+
+    if ($el.hasClass('current')) {
       currentPage = parseInt(text) || 1;
     }
-    
-    if (text === 'NEXT' && $elem.attr('href')) {
-      hasNextPage = true;
-    }
-    
-    if ((text === 'PREV' || text === 'PREVIOUS') && $elem.attr('href')) {
-      hasPrevPage = true;
-    }
-    
+
+    if (text === 'NEXT') hasNextPage = true;
+    if (text === 'PREV' || text === 'PREVIOUS') hasPrevPage = true;
+
     if (!isNaN(text) && text !== '...') {
-      const pageNum = parseInt(text);
-      if (pageNum > totalPages) {
-        totalPages = pageNum;
-      }
+      totalPages = Math.max(totalPages, parseInt(text));
     }
+  });
+
+  return {
+    currentPage,
+    totalPages,
+    hasNextPage,
+    hasPrevPage
+  };
+}
+
+// --- SMART SCRAPER WITH 404 FALLBACK ---
+async function scrapeMoviesPage(baseUrl, pageNumber = 1) {
+  let moviesUrl =
+    pageNumber === 1
+      ? `${baseUrl}/movies/`
+      : `${baseUrl}/movies/page/${pageNumber}/`;
+
+  console.log(`Trying: ${moviesUrl}`);
+
+  let response;
+
+  try {
+    response = await axios.get(moviesUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 30000
+    });
+  } catch (err) {
+    console.log(`404 on page ${pageNumber}, falling back to page 1`);
+
+    // 👉 Fallback to page 1 if 404 happens
+    moviesUrl = `${baseUrl}/movies/`;
+
+    response = await axios.get(moviesUrl, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      timeout: 30000
+    });
+  }
+
+  const $ = cheerio.load(response.data);
+
+  const results = scrapeMovies($);
+  const pagination = scrapePagination($);
+
+  return {
+    success: true,
+    category: "anime-movies",
+    categoryName: "Anime Movies",
+    results,
+    pagination
+  };
+}
+
+// --- FINAL API HANDLER ---
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+
+  if (req.method === 'OPTIONS') return res.status(200).end();
+
+  if (req.method !== 'GET') {
+    return res.status(405).json({
+      success: false,
+      error: 'Method not allowed. Use GET.'
+    });
+  }
+
+  try {
+    const baseUrl = getBaseUrl();
+    if (!baseUrl) {
+      return res.status(500).json({
+        success: false,
+        error: 'Base URL missing in src/baseurl.txt'
+      });
+    }
+
+    const pageNumber = Math.max(1, parseInt(req.query.page) || 1);
+
+    const data = await scrapeMoviesPage(baseUrl, pageNumber);
+
+    res.status(200).json(data);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({
+      success: false,
+      error: 'Server error',
+      message: err.message
+    });
+  }
+};    }
   });
   
   return {
