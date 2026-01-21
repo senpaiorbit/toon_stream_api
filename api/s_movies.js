@@ -2,9 +2,9 @@ export const config = {
   runtime: "edge",
 };
 
-export default async function handler(request) {
+export default async function handler(req) {
   try {
-    const { searchParams } = new URL(request.url);
+    const { searchParams } = new URL(req.url);
     const page = searchParams.get("page") || "1";
 
     const target =
@@ -15,54 +15,55 @@ export default async function handler(request) {
     const res = await fetch(target, {
       headers: {
         "user-agent": "Mozilla/5.0",
+        "accept": "text/html",
       },
     });
-
-    if (!res.ok) {
-      return respond({ success: false, error: "Fetch failed" }, 500);
-    }
 
     const html = await res.text();
     const doc = new DOMParser().parseFromString(html, "text/html");
 
-    // 🔥 FIXED SELECTOR
-    const liNodes = [...doc.querySelectorAll("ul.post-lst > li")];
+    /* 🔥 FIXED SELECTOR */
+    const list = doc.querySelector("ul.post-lst");
+    const items = list
+      ? [...list.querySelectorAll("li[class*='movies']")]
+      : [];
 
-    const results = liNodes
-      .map((li) => {
-        const titleEl = li.querySelector(".entry-title");
-        const linkEl = li.querySelector("a.lnk-blk");
-        const imgEl = li.querySelector("img");
+    const results = items.map((li) => {
+      const titleEl = li.querySelector("h2.entry-title");
+      const linkEl = li.querySelector("a.lnk-blk");
+      const imgEl = li.querySelector("img");
 
-        if (!titleEl || !linkEl || !imgEl) return null;
+      const title = titleEl?.textContent?.trim() || "";
+      const url = linkEl?.href || "";
+      const posterRaw = imgEl?.getAttribute("src") || "";
 
-        const title = titleEl.textContent.trim();
-        const url = linkEl.href;
+      const poster = posterRaw.startsWith("//")
+        ? "https:" + posterRaw
+        : posterRaw;
 
-        const posterRaw = imgEl.getAttribute("src");
-        const poster = posterRaw.startsWith("//")
-          ? "https:" + posterRaw
-          : posterRaw;
+      const id = url
+        .replace("https://toonstream.one/", "")
+        .replace(/\/$/, "")
+        .split("/")
+        .pop();
 
-        const id = url
-          .replace("https://toonstream.one/", "")
-          .replace(/\/$/, "")
-          .split("/")
-          .pop();
+      return {
+        id,
+        title,
+        url,
+        poster,
+      };
+    });
 
-        return { id, title, url, poster };
-      })
-      .filter(Boolean); // 🔥 remove nulls
-
-    // Pagination
+    /* Pagination */
     const pages = [...doc.querySelectorAll(".pagination .page-link")]
-      .map((a) => Number(a.textContent))
+      .map((a) => parseInt(a.textContent))
       .filter(Boolean);
 
-    const currentPage = Number(page);
     const totalPages = pages.length ? Math.max(...pages) : 1;
+    const currentPage = Number(page);
 
-    return respond({
+    return json({
       success: true,
       category: "anime-movies",
       categoryName: "Anime Movies",
@@ -75,11 +76,11 @@ export default async function handler(request) {
       },
     });
   } catch (e) {
-    return respond({ success: false, error: e.message }, 500);
+    return json({ success: false, error: e.message }, 500);
   }
 }
 
-function respond(data, status = 200) {
+function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
