@@ -32,6 +32,12 @@ function scrapeMovieDetails($) {
   movie.posterImage = extractImageUrl($('.post-thumbnail img').attr('src'));
   movie.posterAlt = $('.post-thumbnail img').attr('alt') || '';
   
+  // Backdrop images
+  movie.backdrop = {
+    header: extractImageUrl($('.bghd .TPostBg').attr('src')) || null,
+    footer: extractImageUrl($('.bgft .TPostBg').attr('src')) || null
+  };
+  
   // Genres
   movie.genres = [];
   $('.entry-meta .genres a').each((index, element) => {
@@ -283,6 +289,7 @@ async function scrapeMoviePage(baseUrl, moviePath) {
       data: data,
       stats: {
         hasMovieDetails: !!data.movieDetails.title,
+        hasBackdrop: !!(data.movieDetails.backdrop.header || data.movieDetails.backdrop.footer),
         videoOptionsCount: data.videoOptions.iframes.length,
         commentsCount: data.comments.length,
         relatedMoviesCount: data.relatedMovies.length
