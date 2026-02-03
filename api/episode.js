@@ -78,30 +78,14 @@ async function fetchProcessedIframeUrl(originalUrl) {
     });
     
     if (response.data && response.data.scraped && response.data.scraped.iframe_src) {
-      return {
-        success: true,
-        processedUrl: response.data.scraped.iframe_src,
-        fallbackUrl: response.data.full_url || originalUrl,
-        apiResponse: response.data
-      };
+      return response.data.scraped.iframe_src;
     } else {
       // If iframe_src is null or missing, use fallback
-      return {
-        success: false,
-        processedUrl: response.data?.full_url || originalUrl,
-        fallbackUrl: originalUrl,
-        apiResponse: response.data,
-        reason: 'iframe_src is null or missing'
-      };
+      return response.data?.full_url || originalUrl;
     }
   } catch (error) {
     console.error('Error fetching processed iframe URL:', error.message);
-    return {
-      success: false,
-      processedUrl: originalUrl,
-      fallbackUrl: originalUrl,
-      error: error.message
-    };
+    return originalUrl;
   }
 }
 
@@ -207,19 +191,12 @@ async function scrapeServers($) {
     }
   });
   
-  // Process first server through API
-  if (servers.length > 0 && servers[0].originalSrc) {
-    console.log(`Processing first server iframe through API...`);
-    const apiResult = await fetchProcessedIframeUrl(servers[0].originalSrc);
-    
-    servers[0].src = apiResult.processedUrl;
-    servers[0].apiProcessed = true;
-    servers[0].apiSuccess = apiResult.success;
-    servers[0].apiResponse = apiResult.apiResponse;
-    
-    if (!apiResult.success) {
-      servers[0].apiFallback = true;
-      servers[0].apiError = apiResult.error || apiResult.reason;
+  // Process all servers through API
+  console.log(`Processing ${servers.length} servers through API...`);
+  for (let i = 0; i < servers.length; i++) {
+    if (servers[i].originalSrc) {
+      const processedUrl = await fetchProcessedIframeUrl(servers[i].originalSrc);
+      servers[i].src = processedUrl;
     }
   }
   
@@ -288,8 +265,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
         totalServersAvailable: allServers.length,
         serversReturned: filteredServers.length,
         castCount: data.cast.length,
-        categoriesCount: data.categories.length,
-        firstServerProcessed: allServers.length > 0 ? allServers[0].apiProcessed : false
+        categoriesCount: data.categories.length
       }
     };
     
