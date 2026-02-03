@@ -23,7 +23,7 @@ function extractImageUrl(imgSrc) {
   return imgSrc;
 }
 
-// Extract iframe from HTML (embedded logic)
+// Extract iframe from HTML (embedded logic with better error handling)
 async function extractIframeFromUrl(originalUrl) {
   try {
     console.log(`Extracting iframe from: ${originalUrl}`);
@@ -32,16 +32,30 @@ async function extractIframeFromUrl(originalUrl) {
     const urlObj = new URL(originalUrl);
     const fullUrl = urlObj.toString();
     
-    // Fetch the page
+    // Fetch the page with comprehensive headers
     const response = await axios.get(fullUrl, {
       headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0'
       },
-      timeout: 15000
+      timeout: 15000,
+      maxRedirects: 5,
+      validateStatus: function (status) {
+        return status >= 200 && status < 500; // Accept any status code less than 500
+      }
     });
     
-    if (response.status !== 200) {
-      console.error('Failed to fetch page:', response.status);
+    // If we got a 403 or other error, fallback to original URL
+    if (response.status === 403 || response.status === 404 || response.status >= 400) {
+      console.log(`Got status ${response.status}, using original URL as fallback`);
       return originalUrl;
     }
     
@@ -61,7 +75,7 @@ async function extractIframeFromUrl(originalUrl) {
     
   } catch (error) {
     console.error('Error extracting iframe:', error.message);
-    // Fallback to original URL on error
+    // Fallback to original URL on any error
     return originalUrl;
   }
 }
@@ -316,9 +330,19 @@ async function scrapeMoviePage(baseUrl, moviePath) {
     
     const response = await axios.get(movieUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0'
       },
-      timeout: 30000
+      timeout: 30000,
+      maxRedirects: 5
     });
     
     const $ = cheerio.load(response.data);
@@ -360,6 +384,14 @@ async function scrapeMoviePage(baseUrl, moviePath) {
         success: false,
         error: 'Movie not found',
         statusCode: 404
+      };
+    }
+    
+    if (error.response && error.response.status === 403) {
+      return {
+        success: false,
+        error: 'Access forbidden (403). The website may be blocking requests.',
+        statusCode: 403
       };
     }
     
@@ -413,6 +445,10 @@ module.exports = async (req, res) => {
     
     if (!result.success && result.statusCode === 404) {
       return res.status(404).json(result);
+    }
+    
+    if (!result.success && result.statusCode === 403) {
+      return res.status(403).json(result);
     }
     
     res.status(result.success ? 200 : 500).json(result);
