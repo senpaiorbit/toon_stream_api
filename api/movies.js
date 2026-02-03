@@ -23,6 +23,49 @@ function extractImageUrl(imgSrc) {
   return imgSrc;
 }
 
+// Extract iframe from HTML (embedded logic)
+async function extractIframeFromUrl(originalUrl) {
+  try {
+    console.log(`Extracting iframe from: ${originalUrl}`);
+    
+    // Parse URL to rebuild it properly
+    const urlObj = new URL(originalUrl);
+    const fullUrl = urlObj.toString();
+    
+    // Fetch the page
+    const response = await axios.get(fullUrl, {
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' 
+      },
+      timeout: 15000
+    });
+    
+    if (response.status !== 200) {
+      console.error('Failed to fetch page:', response.status);
+      return originalUrl;
+    }
+    
+    const html = response.data;
+    
+    // Extract iframe src using regex
+    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+    
+    if (iframeMatch && iframeMatch[1]) {
+      const iframeSrc = iframeMatch[1];
+      console.log(`Extracted iframe: ${iframeSrc}`);
+      return iframeSrc;
+    } else {
+      console.log('No iframe found, using original URL');
+      return originalUrl;
+    }
+    
+  } catch (error) {
+    console.error('Error extracting iframe:', error.message);
+    // Fallback to original URL on error
+    return originalUrl;
+  }
+}
+
 // Scrape movie details
 function scrapeMovieDetails($) {
   const movie = {};
@@ -133,7 +176,7 @@ function scrapeMovieDetails($) {
 }
 
 // Scrape video/streaming options
-function scrapeVideoOptions($) {
+async function scrapeVideoOptions($) {
   const videoOptions = {
     languages: [],
     servers: []
@@ -182,20 +225,33 @@ function scrapeVideoOptions($) {
     });
   });
   
-  // Video iframes
-  videoOptions.iframes = [];
+  // Video iframes - extract original URLs first
+  const iframes = [];
   $('.video-player .video').each((index, element) => {
     const $elem = $(element);
     const optionId = $elem.attr('id');
     const isActive = $elem.hasClass('on');
     const $iframe = $elem.find('iframe');
+    const originalSrc = $iframe.attr('src') || $iframe.attr('data-src') || '';
     
-    videoOptions.iframes.push({
+    iframes.push({
       optionId: optionId,
       active: isActive,
-      src: $iframe.attr('src') || $iframe.attr('data-src') || ''
+      originalSrc: originalSrc,
+      src: originalSrc
     });
   });
+  
+  // Process all iframes to extract real URLs
+  console.log(`Processing ${iframes.length} video iframes...`);
+  for (let i = 0; i < iframes.length; i++) {
+    if (iframes[i].originalSrc) {
+      const extractedUrl = await extractIframeFromUrl(iframes[i].originalSrc);
+      iframes[i].src = extractedUrl;
+    }
+  }
+  
+  videoOptions.iframes = iframes;
   
   return videoOptions;
 }
@@ -279,7 +335,7 @@ async function scrapeMoviePage(baseUrl, moviePath) {
       postId: postId,
       scrapedAt: new Date().toISOString(),
       movieDetails: scrapeMovieDetails($),
-      videoOptions: scrapeVideoOptions($),
+      videoOptions: await scrapeVideoOptions($),
       comments: scrapeComments($),
       relatedMovies: scrapeRelatedMovies($)
     };
