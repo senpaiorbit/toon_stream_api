@@ -2,30 +2,24 @@ export const config = {
   runtime: 'edge',
 };
 
-// Fallback base URL if GitHub fetch fails
 const FALLBACK_BASE_URL = 'https://toonstream.one';
 
 export default async function handler(request) {
   const { searchParams } = new URL(request.url);
   const path = searchParams.get('path') || '';
-  const extract = searchParams.get('extract'); // anime, episode, search, etc.
+  const extract = searchParams.get('extract') || 'home';
 
   try {
-    // Fetch base URL from GitHub with timeout and fallback
+    // Fetch base URL with fallback
     let baseUrl = FALLBACK_BASE_URL;
     
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
       
       const baseUrlResponse = await fetch(
         'https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt',
-        { 
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (compatible; EdgeScraper/1.0)',
-          }
-        }
+        { signal: controller.signal }
       );
       
       clearTimeout(timeoutId);
@@ -36,23 +30,20 @@ export default async function handler(request) {
           baseUrl = fetchedUrl;
         }
       }
-    } catch (githubError) {
-      console.error('GitHub fetch failed, using fallback URL:', githubError.message);
-      // Continue with fallback URL
+    } catch (error) {
+      // Use fallback URL
     }
 
     const targetUrl = `${baseUrl}${path}`;
 
-    // Fetch the target page with better error handling
+    // Fetch the target page
     const pageResponse = await fetch(targetUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate, br',
         'Referer': baseUrl,
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
       },
     });
 
@@ -60,10 +51,8 @@ export default async function handler(request) {
       return new Response(
         JSON.stringify({
           success: false,
-          error: `Failed to fetch page: ${pageResponse.status} ${pageResponse.statusText}`,
+          error: `Failed to fetch: ${pageResponse.status} ${pageResponse.statusText}`,
           url: targetUrl,
-          baseUrl: baseUrl,
-          timestamp: new Date().toISOString(),
         }, null, 2),
         {
           status: pageResponse.status,
@@ -77,37 +66,31 @@ export default async function handler(request) {
 
     const html = await pageResponse.text();
 
-    // Extract data based on requested type
+    // Extract data based on type
     let data;
     switch (extract) {
+      case 'home':
+        data = extractHomeData(html, baseUrl);
+        break;
+      case 'suggestions':
+        data = extractSuggestions(html, baseUrl);
+        break;
       case 'anime':
-        data = extractAnimeList(html, baseUrl);
+        data = extractAnimeDetails(html, baseUrl, path);
         break;
       case 'episode':
-        data = extractEpisodeData(html, baseUrl);
+        data = extractEpisodeData(html, baseUrl, path);
         break;
       case 'search':
         data = extractSearchResults(html, baseUrl);
         break;
-      case 'metadata':
-        data = extractMetadata(html, baseUrl);
-        break;
-      case 'raw':
-        // Return raw HTML
-        return new Response(html, {
-          status: 200,
-          headers: {
-            'Content-Type': 'text/html',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
-          },
-        });
       default:
-        data = parseHTML(html, baseUrl);
+        data = extractHomeData(html, baseUrl);
     }
 
-    // Add success flag
     data.success = true;
+    data.baseUrl = baseUrl;
+    data.timestamp = new Date().toISOString();
 
     return new Response(JSON.stringify(data, null, 2), {
       status: 200,
@@ -122,7 +105,6 @@ export default async function handler(request) {
       JSON.stringify({
         success: false,
         error: error.message,
-        stack: error.stack,
         timestamp: new Date().toISOString(),
       }, null, 2),
       {
@@ -136,339 +118,351 @@ export default async function handler(request) {
   }
 }
 
-function extractMetadata(html, baseUrl) {
+function extractHomeData(html, baseUrl) {
   const data = {
-    baseUrl,
-    timestamp: new Date().toISOString(),
+    page: 'home',
+    suggestions: [],
+    trending: [],
+    recent: [],
   };
 
   // Extract title
   const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
   if (titleMatch) {
-    data.title = titleMatch[1].trim();
+    data.siteTitle = titleMatch[1].trim();
   }
 
-  // Extract all meta tags
-  const metaRegex = /<meta\s+([^>]*?)>/gi;
-  const metas = {};
-  let match;
+  // Extract suggestions from the page
+  data.suggestions = extractSuggestions(html, baseUrl).suggestions;
 
-  while ((match = metaRegex.exec(html)) !== null) {
-    const nameMatch = match[1].match(/name=["']([^"']+)["']/);
-    const propertyMatch = match[1].match(/property=["']([^"']+)["']/);
-    const contentMatch = match[1].match(/content=["']([^"']+)["']/);
+  // Extract trending/popular anime
+  const trendingPatterns = [
+    /<div[^>]*class="[^"]*trending[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    /<div[^>]*class="[^"]*popular[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    /<section[^>]*class="[^"]*featured[^"]*"[^>]*>([\s\S]*?)<\/section>/gi,
+  ];
 
-    if (contentMatch) {
-      if (nameMatch) {
-        metas[nameMatch[1]] = contentMatch[1];
-      } else if (propertyMatch) {
-        metas[propertyMatch[1]] = contentMatch[1];
-      }
+  trendingPatterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      const items = extractAnimeItems(match[1]);
+      data.trending.push(...items);
     }
-  }
+  });
 
-  data.metadata = metas;
+  // Extract recent anime
+  const recentPatterns = [
+    /<div[^>]*class="[^"]*recent[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    /<div[^>]*class="[^"]*latest[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+  ];
+
+  recentPatterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      const items = extractAnimeItems(match[1]);
+      data.recent.push(...items);
+    }
+  });
+
+  // Remove duplicates
+  data.trending = removeDuplicates(data.trending);
+  data.recent = removeDuplicates(data.recent);
 
   return data;
 }
 
-function extractAnimeList(html, baseUrl) {
-  const animeList = [];
-  
-  // Multiple patterns to catch different HTML structures
-  const patterns = [
-    // Pattern 1: div with anime-item class
-    /<div[^>]*class="[^"]*anime-item[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
-    // Pattern 2: div with item class containing links
-    /<div[^>]*class="[^"]*item[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
-    // Pattern 3: article tags
-    /<article[^>]*>([\s\S]*?)<\/article>/gi,
-  ];
+function extractSuggestions(html, baseUrl) {
+  const data = {
+    page: 'suggestions',
+    suggestions: [],
+  };
 
-  patterns.forEach(pattern => {
-    let match;
-    const regex = new RegExp(pattern);
+  // Pattern 1: Look for "Suggestion:" text block
+  const suggestionBlockMatch = html.match(/Suggestion[:\s]*([\s\S]*?)(?:<\/div>|<div|$)/i);
+  
+  if (suggestionBlockMatch) {
+    const block = suggestionBlockMatch[1];
     
-    while ((match = regex.exec(html)) !== null) {
-      const itemHtml = match[1];
-      
-      // Extract title - try multiple patterns
-      const titlePatterns = [
-        /<(?:h\d|div|span|a)[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i,
-        /<a[^>]*title=["']([^"']+)["']/i,
-        /<img[^>]*alt=["']([^"']+)["']/i,
-      ];
-      
-      let title = null;
-      for (const titlePattern of titlePatterns) {
-        const titleMatch = itemHtml.match(titlePattern);
-        if (titleMatch) {
-          title = titleMatch[1].trim();
-          break;
+    // Extract anime titles from the block
+    const titleMatches = block.match(/([A-Za-z0-9\s\-:'()]+(?:Season\s+\d+)?),?/g);
+    
+    if (titleMatches) {
+      titleMatches.forEach(title => {
+        const cleanTitle = title.replace(/,$/, '').trim();
+        if (cleanTitle.length > 3 && !cleanTitle.match(/^(div|span|class|style)$/i)) {
+          data.suggestions.push({
+            title: cleanTitle,
+            type: 'suggestion',
+          });
         }
-      }
-      
-      // Extract image
-      const imgMatch = itemHtml.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/i);
-      
-      // Extract link
-      const linkMatch = itemHtml.match(/href=["']([^"']+)["']/);
-      
-      if (title || linkMatch) {
-        const anime = {
+      });
+    }
+  }
+
+  // Pattern 2: Look for suggestion data attributes or classes
+  const suggestionRegex = /<(?:div|li|a)[^>]*class="[^"]*suggestion[^"]*"[^>]*>([\s\S]*?)<\/(?:div|li|a)>/gi;
+  let match;
+
+  while ((match = suggestionRegex.exec(html)) !== null) {
+    const itemHtml = match[1];
+    const titleMatch = itemHtml.match(/>([^<]+)</);
+    
+    if (titleMatch) {
+      const title = titleMatch[1].trim();
+      if (title.length > 3) {
+        data.suggestions.push({
           title: title,
-          image: imgMatch ? imgMatch[1] : null,
-          url: linkMatch ? linkMatch[1] : null,
-        };
-        
-        // Avoid duplicates
-        const isDuplicate = animeList.some(item => 
-          item.url === anime.url || 
-          (item.title && item.title === anime.title)
-        );
-        
-        if (!isDuplicate && (anime.title || anime.url)) {
-          animeList.push(anime);
-        }
+          type: 'suggestion',
+        });
       }
     }
-  });
+  }
 
-  return {
-    baseUrl,
-    timestamp: new Date().toISOString(),
-    count: animeList.length,
-    anime: animeList,
-  };
+  // Remove duplicates
+  data.suggestions = removeDuplicates(data.suggestions);
+
+  return data;
 }
 
-function extractEpisodeData(html, baseUrl) {
+function extractAnimeDetails(html, baseUrl, path) {
   const data = {
-    baseUrl,
-    timestamp: new Date().toISOString(),
+    page: 'anime',
+    title: '',
+    description: '',
+    genres: [],
+    status: '',
+    releaseYear: '',
+    rating: '',
+    image: '',
     episodes: [],
-    videoSources: [],
+    alternativeTitles: [],
   };
 
-  // Extract episode list - multiple patterns
-  const episodePatterns = [
-    /<(?:a|div|li)[^>]*class="[^"]*episode[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div|li)>/gi,
-    /<(?:a|div|li)[^>]*data-episode[^>]*>([\s\S]*?)<\/(?:a|div|li)>/gi,
+  // Extract title
+  const titlePatterns = [
+    /<h1[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i,
+    /<div[^>]*class="[^"]*anime-title[^"]*"[^>]*>([^<]+)</i,
+    /<title>([^<|]+)/i,
   ];
 
-  episodePatterns.forEach(pattern => {
-    let match;
-    while ((match = pattern.exec(html)) !== null) {
-      const episodeHtml = match[0];
-      const numberMatch = episodeHtml.match(/episode[^\d]*(\d+)/i) || 
-                         episodeHtml.match(/ep[^\d]*(\d+)/i) ||
-                         episodeHtml.match(/data-episode=["'](\d+)["']/i);
-      const linkMatch = episodeHtml.match(/href=["']([^"']+)["']/);
-      
-      if (numberMatch || linkMatch) {
-        const episode = {
-          number: numberMatch ? parseInt(numberMatch[1]) : null,
-          url: linkMatch ? linkMatch[1] : null,
-        };
-        
-        // Avoid duplicates
-        const isDuplicate = data.episodes.some(ep => 
-          ep.number === episode.number || ep.url === episode.url
-        );
-        
-        if (!isDuplicate) {
-          data.episodes.push(episode);
-        }
-      }
+  for (const pattern of titlePatterns) {
+    const match = html.match(pattern);
+    if (match) {
+      data.title = match[1].trim();
+      break;
     }
-  });
+  }
 
-  // Extract video sources (iframe, video tags, etc.)
-  const iframeRegex = /<iframe[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  // Extract description
+  const descPatterns = [
+    /<div[^>]*class="[^"]*description[^"]*"[^>]*>([^<]+)</i,
+    /<p[^>]*class="[^"]*synopsis[^"]*"[^>]*>([^<]+)</i,
+    /<meta\s+name="description"\s+content="([^"]+)"/i,
+  ];
+
+  for (const pattern of descPatterns) {
+    const match = html.match(pattern);
+    if (match) {
+      data.description = match[1].trim();
+      break;
+    }
+  }
+
+  // Extract genres
+  const genreRegex = /<(?:a|span)[^>]*class="[^"]*genre[^"]*"[^>]*>([^<]+)</gi;
+  let match;
+  while ((match = genreRegex.exec(html)) !== null) {
+    data.genres.push(match[1].trim());
+  }
+
+  // Extract status
+  const statusMatch = html.match(/status["\s:]*(?:ongoing|completed|upcoming)/i);
+  if (statusMatch) {
+    data.status = statusMatch[0].match(/(ongoing|completed|upcoming)/i)[1];
+  }
+
+  // Extract release year
+  const yearMatch = html.match(/(?:year|released?)["\s:]*(\d{4})/i);
+  if (yearMatch) {
+    data.releaseYear = yearMatch[1];
+  }
+
+  // Extract rating
+  const ratingMatch = html.match(/rating["\s:]*(\d+\.?\d*)/i);
+  if (ratingMatch) {
+    data.rating = ratingMatch[1];
+  }
+
+  // Extract main image
+  const imgMatch = html.match(/<img[^>]*class="[^"]*(?:poster|thumbnail|main-image)[^"]*"[^>]*src="([^"]+)"/i);
+  if (imgMatch) {
+    data.image = imgMatch[1];
+  }
+
+  // Extract episodes
+  data.episodes = extractEpisodeList(html);
+
+  return data;
+}
+
+function extractEpisodeData(html, baseUrl, path) {
+  const data = {
+    page: 'episode',
+    title: '',
+    episodeNumber: '',
+    videoSources: [],
+    nextEpisode: '',
+    previousEpisode: '',
+    relatedEpisodes: [],
+  };
+
+  // Extract episode title
+  const titleMatch = html.match(/<h1[^>]*>([^<]+)</i) || html.match(/<title>([^<|]+)/i);
+  if (titleMatch) {
+    data.title = titleMatch[1].trim();
+  }
+
+  // Extract episode number
+  const epNumberMatch = data.title.match(/episode[^\d]*(\d+)/i) || 
+                       html.match(/episode[^\d]*(\d+)/i) ||
+                       path.match(/episode[^\d]*(\d+)/i);
+  if (epNumberMatch) {
+    data.episodeNumber = epNumberMatch[1];
+  }
+
+  // Extract video sources
+  const iframeRegex = /<iframe[^>]*src="([^"]+)"/gi;
   let match;
   while ((match = iframeRegex.exec(html)) !== null) {
     data.videoSources.push({
       type: 'iframe',
       url: match[1],
+      quality: 'default',
     });
   }
 
-  const videoRegex = /<video[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  const videoRegex = /<(?:video|source)[^>]*src="([^"]+)"[^>]*(?:data-quality="([^"]*)")?/gi;
   while ((match = videoRegex.exec(html)) !== null) {
     data.videoSources.push({
       type: 'video',
       url: match[1],
+      quality: match[2] || 'default',
     });
   }
 
-  // Extract from source tags inside video
-  const sourceRegex = /<source[^>]*src=["']([^"']+)["'][^>]*>/gi;
-  while ((match = sourceRegex.exec(html)) !== null) {
-    data.videoSources.push({
-      type: 'source',
-      url: match[1],
-    });
+  // Extract next/previous episode links
+  const nextMatch = html.match(/<a[^>]*class="[^"]*(?:next|forward)[^"]*"[^>]*href="([^"]+)"/i);
+  if (nextMatch) {
+    data.nextEpisode = nextMatch[1];
   }
+
+  const prevMatch = html.match(/<a[^>]*class="[^"]*(?:prev|previous|back)[^"]*"[^>]*href="([^"]+)"/i);
+  if (prevMatch) {
+    data.previousEpisode = prevMatch[1];
+  }
+
+  // Extract related episodes
+  data.relatedEpisodes = extractEpisodeList(html);
 
   return data;
 }
 
 function extractSearchResults(html, baseUrl) {
-  const results = [];
+  const data = {
+    page: 'search',
+    results: [],
+  };
+
+  // Extract search results
+  const items = extractAnimeItems(html);
   
-  // Multiple patterns for search results
+  data.results = items.map(item => ({
+    title: item.title,
+    description: item.description || '',
+    image: item.image,
+    url: item.url,
+    type: item.type || 'anime',
+  }));
+
+  return data;
+}
+
+// Helper function to extract anime items from HTML
+function extractAnimeItems(html) {
+  const items = [];
+  
   const patterns = [
-    /<div[^>]*class="[^"]*search-result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
-    /<div[^>]*class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
-    /<li[^>]*class="[^"]*search[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+    /<(?:div|article|li)[^>]*class="[^"]*(?:anime-item|item|card)[^"]*"[^>]*>([\s\S]*?)<\/(?:div|article|li)>/gi,
   ];
 
   patterns.forEach(pattern => {
     let match;
     while ((match = pattern.exec(html)) !== null) {
-      const resultHtml = match[1];
+      const itemHtml = match[1];
       
-      const titleMatch = resultHtml.match(/<(?:h\d|div|span|a)[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i) ||
-                        resultHtml.match(/<a[^>]*title=["']([^"']+)["']/i);
-      const imgMatch = resultHtml.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/i);
-      const linkMatch = resultHtml.match(/href=["']([^"']+)["']/);
+      // Extract title
+      const titleMatch = itemHtml.match(/<(?:h\d|a|div)[^>]*(?:class="[^"]*title[^"]*"|title="([^"]+)")[^>]*>([^<]+)</i);
+      const title = titleMatch ? (titleMatch[1] || titleMatch[2]).trim() : null;
       
-      if (titleMatch || linkMatch) {
-        const result = {
-          title: titleMatch ? titleMatch[1].trim() : null,
+      // Extract image
+      const imgMatch = itemHtml.match(/src="([^"]+\.(?:jpg|jpeg|png|webp|gif)[^"]*)"/i);
+      
+      // Extract link
+      const linkMatch = itemHtml.match(/href="([^"]+)"/i);
+      
+      // Extract description (if available)
+      const descMatch = itemHtml.match(/<p[^>]*class="[^"]*(?:desc|synopsis)[^"]*"[^>]*>([^<]+)</i);
+      
+      if (title || linkMatch) {
+        items.push({
+          title: title,
+          description: descMatch ? descMatch[1].trim() : '',
           image: imgMatch ? imgMatch[1] : null,
           url: linkMatch ? linkMatch[1] : null,
-        };
-        
-        const isDuplicate = results.some(item => 
-          item.url === result.url || 
-          (item.title && item.title === result.title)
-        );
-        
-        if (!isDuplicate && (result.title || result.url)) {
-          results.push(result);
-        }
+        });
       }
     }
   });
 
-  return {
-    baseUrl,
-    timestamp: new Date().toISOString(),
-    count: results.length,
-    results,
-  };
+  return items;
 }
 
-function parseHTML(html, baseUrl) {
-  const data = {
-    baseUrl,
-    timestamp: new Date().toISOString(),
-    metadata: {},
-    content: {},
-  };
-
-  // Extract meta tags
-  const metaRegex = /<meta\s+([^>]*?)>/gi;
-  const metas = [];
+// Helper function to extract episode list
+function extractEpisodeList(html) {
+  const episodes = [];
+  
+  const episodeRegex = /<(?:a|div|li)[^>]*(?:class="[^"]*episode[^"]*"|data-episode)[^>]*>([\s\S]*?)<\/(?:a|div|li)>/gi;
   let match;
 
-  while ((match = metaRegex.exec(html)) !== null) {
-    const attrs = {};
-    const attrRegex = /(\w+)=["']([^"']+)["']/g;
-    let attrMatch;
+  while ((match = episodeRegex.exec(html)) !== null) {
+    const episodeHtml = match[0];
     
-    while ((attrMatch = attrRegex.exec(match[1])) !== null) {
-      attrs[attrMatch[1]] = attrMatch[2];
-    }
+    const numberMatch = episodeHtml.match(/episode[^\d]*(\d+)/i) || 
+                       episodeHtml.match(/ep[^\d]*(\d+)/i);
+    const linkMatch = episodeHtml.match(/href="([^"]+)"/i);
+    const titleMatch = episodeHtml.match(/>([^<]+)</);
     
-    if (Object.keys(attrs).length > 0) {
-      metas.push(attrs);
-    }
-  }
-
-  // Extract title
-  const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
-  if (titleMatch) {
-    data.metadata.title = titleMatch[1];
-  }
-
-  // Extract meta description
-  const descMeta = metas.find(m => m.name === 'description');
-  if (descMeta) {
-    data.metadata.description = descMeta.content;
-  }
-
-  // Extract meta keywords
-  const keywordsMeta = metas.find(m => m.name === 'keywords');
-  if (keywordsMeta) {
-    data.metadata.keywords = keywordsMeta.content;
-  }
-
-  // Extract OG tags
-  const ogTags = {};
-  metas.forEach(meta => {
-    if (meta.property && meta.property.startsWith('og:')) {
-      const key = meta.property.replace('og:', '');
-      ogTags[key] = meta.content;
-    }
-  });
-  
-  if (Object.keys(ogTags).length > 0) {
-    data.metadata.openGraph = ogTags;
-  }
-
-  data.metadata.allMetas = metas;
-
-  // Extract links
-  const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
-  const links = [];
-  while ((match = linkRegex.exec(html)) !== null) {
-    if (match[1] && !match[1].startsWith('#')) {
-      links.push({
-        url: match[1],
-        text: match[2].trim(),
+    if (numberMatch || linkMatch) {
+      episodes.push({
+        number: numberMatch ? parseInt(numberMatch[1]) : null,
+        title: titleMatch ? titleMatch[1].trim() : null,
+        url: linkMatch ? linkMatch[1] : null,
       });
     }
   }
-  
-  if (links.length > 0) {
-    data.content.links = links.slice(0, 100); // Increased limit
-  }
 
-  // Extract images
-  const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*(?:alt=["']([^"']*)["'])?[^>]*>/gi;
-  const images = [];
-  while ((match = imgRegex.exec(html)) !== null) {
-    images.push({
-      src: match[1],
-      alt: match[2] || '',
-    });
-  }
-  
-  if (images.length > 0) {
-    data.content.images = images.slice(0, 50); // Increased limit
-  }
+  return removeDuplicates(episodes);
+}
 
-  // Extract scripts
-  const scriptRegex = /<script[^>]*src=["']([^"']+)["'][^>]*>/gi;
-  const scripts = [];
-  while ((match = scriptRegex.exec(html)) !== null) {
-    scripts.push(match[1]);
-  }
-  if (scripts.length > 0) {
-    data.content.scripts = scripts;
-  }
-
-  // Extract stylesheets
-  const styleRegex = /<link[^>]*rel=["']stylesheet["'][^>]*href=["']([^"']+)["'][^>]*>/gi;
-  const stylesheets = [];
-  while ((match = styleRegex.exec(html)) !== null) {
-    stylesheets.push(match[1]);
-  }
-  if (stylesheets.length > 0) {
-    data.content.stylesheets = stylesheets;
-  }
-
-  return data;
+// Helper function to remove duplicates
+function removeDuplicates(array) {
+  const seen = new Set();
+  return array.filter(item => {
+    const key = item.url || item.title || JSON.stringify(item);
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
