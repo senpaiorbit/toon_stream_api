@@ -2,37 +2,77 @@ export const config = {
   runtime: 'edge',
 };
 
+// Fallback base URL if GitHub fetch fails
+const FALLBACK_BASE_URL = 'https://toonstream.one';
+
 export default async function handler(request) {
   const { searchParams } = new URL(request.url);
   const path = searchParams.get('path') || '';
   const extract = searchParams.get('extract'); // anime, episode, search, etc.
 
   try {
-    // Fetch base URL from GitHub
-    const baseUrlResponse = await fetch(
-      'https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt'
-    );
+    // Fetch base URL from GitHub with timeout and fallback
+    let baseUrl = FALLBACK_BASE_URL;
     
-    if (!baseUrlResponse.ok) {
-      throw new Error('Failed to fetch base URL');
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      
+      const baseUrlResponse = await fetch(
+        'https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt',
+        { 
+          signal: controller.signal,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (compatible; EdgeScraper/1.0)',
+          }
+        }
+      );
+      
+      clearTimeout(timeoutId);
+      
+      if (baseUrlResponse.ok) {
+        const fetchedUrl = (await baseUrlResponse.text()).trim();
+        if (fetchedUrl && fetchedUrl.startsWith('http')) {
+          baseUrl = fetchedUrl;
+        }
+      }
+    } catch (githubError) {
+      console.error('GitHub fetch failed, using fallback URL:', githubError.message);
+      // Continue with fallback URL
     }
 
-    const baseUrl = (await baseUrlResponse.text()).trim();
     const targetUrl = `${baseUrl}${path}`;
 
-    // Fetch the target page
+    // Fetch the target page with better error handling
     const pageResponse = await fetch(targetUrl, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
         'Referer': baseUrl,
         'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
       },
     });
 
     if (!pageResponse.ok) {
-      throw new Error(`Failed to fetch page: ${pageResponse.status}`);
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: `Failed to fetch page: ${pageResponse.status} ${pageResponse.statusText}`,
+          url: targetUrl,
+          baseUrl: baseUrl,
+          timestamp: new Date().toISOString(),
+        }, null, 2),
+        {
+          status: pageResponse.status,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+          },
+        }
+      );
     }
 
     const html = await pageResponse.text();
@@ -52,9 +92,22 @@ export default async function handler(request) {
       case 'metadata':
         data = extractMetadata(html, baseUrl);
         break;
+      case 'raw':
+        // Return raw HTML
+        return new Response(html, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/html',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+          },
+        });
       default:
         data = parseHTML(html, baseUrl);
     }
+
+    // Add success flag
+    data.success = true;
 
     return new Response(JSON.stringify(data, null, 2), {
       status: 200,
@@ -67,9 +120,11 @@ export default async function handler(request) {
   } catch (error) {
     return new Response(
       JSON.stringify({
+        success: false,
         error: error.message,
+        stack: error.stack,
         timestamp: new Date().toISOString(),
-      }),
+      }, null, 2),
       {
         status: 500,
         headers: {
@@ -120,31 +175,64 @@ function extractMetadata(html, baseUrl) {
 function extractAnimeList(html, baseUrl) {
   const animeList = [];
   
-  // Extract anime items (adjust regex based on actual HTML structure)
-  // This is a generic example - adjust selectors based on actual page structure
-  const animeRegex = /<div[^>]*class="[^"]*anime-item[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-  let match;
+  // Multiple patterns to catch different HTML structures
+  const patterns = [
+    // Pattern 1: div with anime-item class
+    /<div[^>]*class="[^"]*anime-item[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    // Pattern 2: div with item class containing links
+    /<div[^>]*class="[^"]*item[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    // Pattern 3: article tags
+    /<article[^>]*>([\s\S]*?)<\/article>/gi,
+  ];
 
-  while ((match = animeRegex.exec(html)) !== null) {
-    const itemHtml = match[1];
+  patterns.forEach(pattern => {
+    let match;
+    const regex = new RegExp(pattern);
     
-    // Extract title
-    const titleMatch = itemHtml.match(/<(?:h\d|div)[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i);
-    
-    // Extract image
-    const imgMatch = itemHtml.match(/src=["']([^"']+)["']/);
-    
-    // Extract link
-    const linkMatch = itemHtml.match(/href=["']([^"']+)["']/);
-    
-    if (titleMatch || linkMatch) {
-      animeList.push({
-        title: titleMatch ? titleMatch[1].trim() : null,
-        image: imgMatch ? imgMatch[1] : null,
-        url: linkMatch ? linkMatch[1] : null,
-      });
+    while ((match = regex.exec(html)) !== null) {
+      const itemHtml = match[1];
+      
+      // Extract title - try multiple patterns
+      const titlePatterns = [
+        /<(?:h\d|div|span|a)[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i,
+        /<a[^>]*title=["']([^"']+)["']/i,
+        /<img[^>]*alt=["']([^"']+)["']/i,
+      ];
+      
+      let title = null;
+      for (const titlePattern of titlePatterns) {
+        const titleMatch = itemHtml.match(titlePattern);
+        if (titleMatch) {
+          title = titleMatch[1].trim();
+          break;
+        }
+      }
+      
+      // Extract image
+      const imgMatch = itemHtml.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/i);
+      
+      // Extract link
+      const linkMatch = itemHtml.match(/href=["']([^"']+)["']/);
+      
+      if (title || linkMatch) {
+        const anime = {
+          title: title,
+          image: imgMatch ? imgMatch[1] : null,
+          url: linkMatch ? linkMatch[1] : null,
+        };
+        
+        // Avoid duplicates
+        const isDuplicate = animeList.some(item => 
+          item.url === anime.url || 
+          (item.title && item.title === anime.title)
+        );
+        
+        if (!isDuplicate && (anime.title || anime.url)) {
+          animeList.push(anime);
+        }
+      }
     }
-  }
+  });
 
   return {
     baseUrl,
@@ -162,25 +250,42 @@ function extractEpisodeData(html, baseUrl) {
     videoSources: [],
   };
 
-  // Extract episode list
-  const episodeRegex = /<(?:a|div)[^>]*class="[^"]*episode[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div)>/gi;
-  let match;
+  // Extract episode list - multiple patterns
+  const episodePatterns = [
+    /<(?:a|div|li)[^>]*class="[^"]*episode[^"]*"[^>]*>([\s\S]*?)<\/(?:a|div|li)>/gi,
+    /<(?:a|div|li)[^>]*data-episode[^>]*>([\s\S]*?)<\/(?:a|div|li)>/gi,
+  ];
 
-  while ((match = episodeRegex.exec(html)) !== null) {
-    const episodeHtml = match[0];
-    const numberMatch = episodeHtml.match(/episode[^\d]*(\d+)/i);
-    const linkMatch = episodeHtml.match(/href=["']([^"']+)["']/);
-    
-    if (numberMatch || linkMatch) {
-      data.episodes.push({
-        number: numberMatch ? parseInt(numberMatch[1]) : null,
-        url: linkMatch ? linkMatch[1] : null,
-      });
+  episodePatterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      const episodeHtml = match[0];
+      const numberMatch = episodeHtml.match(/episode[^\d]*(\d+)/i) || 
+                         episodeHtml.match(/ep[^\d]*(\d+)/i) ||
+                         episodeHtml.match(/data-episode=["'](\d+)["']/i);
+      const linkMatch = episodeHtml.match(/href=["']([^"']+)["']/);
+      
+      if (numberMatch || linkMatch) {
+        const episode = {
+          number: numberMatch ? parseInt(numberMatch[1]) : null,
+          url: linkMatch ? linkMatch[1] : null,
+        };
+        
+        // Avoid duplicates
+        const isDuplicate = data.episodes.some(ep => 
+          ep.number === episode.number || ep.url === episode.url
+        );
+        
+        if (!isDuplicate) {
+          data.episodes.push(episode);
+        }
+      }
     }
-  }
+  });
 
   // Extract video sources (iframe, video tags, etc.)
   const iframeRegex = /<iframe[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  let match;
   while ((match = iframeRegex.exec(html)) !== null) {
     data.videoSources.push({
       type: 'iframe',
@@ -196,31 +301,56 @@ function extractEpisodeData(html, baseUrl) {
     });
   }
 
+  // Extract from source tags inside video
+  const sourceRegex = /<source[^>]*src=["']([^"']+)["'][^>]*>/gi;
+  while ((match = sourceRegex.exec(html)) !== null) {
+    data.videoSources.push({
+      type: 'source',
+      url: match[1],
+    });
+  }
+
   return data;
 }
 
 function extractSearchResults(html, baseUrl) {
   const results = [];
   
-  // Extract search results (adjust based on actual structure)
-  const resultRegex = /<div[^>]*class="[^"]*search-result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
-  let match;
+  // Multiple patterns for search results
+  const patterns = [
+    /<div[^>]*class="[^"]*search-result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    /<div[^>]*class="[^"]*result[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+    /<li[^>]*class="[^"]*search[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+  ];
 
-  while ((match = resultRegex.exec(html)) !== null) {
-    const resultHtml = match[1];
-    
-    const titleMatch = resultHtml.match(/<(?:h\d|div)[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i);
-    const imgMatch = resultHtml.match(/src=["']([^"']+)["']/);
-    const linkMatch = resultHtml.match(/href=["']([^"']+)["']/);
-    
-    if (titleMatch || linkMatch) {
-      results.push({
-        title: titleMatch ? titleMatch[1].trim() : null,
-        image: imgMatch ? imgMatch[1] : null,
-        url: linkMatch ? linkMatch[1] : null,
-      });
+  patterns.forEach(pattern => {
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      const resultHtml = match[1];
+      
+      const titleMatch = resultHtml.match(/<(?:h\d|div|span|a)[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</i) ||
+                        resultHtml.match(/<a[^>]*title=["']([^"']+)["']/i);
+      const imgMatch = resultHtml.match(/src=["']([^"']+\.(?:jpg|jpeg|png|webp|gif)[^"']*)["']/i);
+      const linkMatch = resultHtml.match(/href=["']([^"']+)["']/);
+      
+      if (titleMatch || linkMatch) {
+        const result = {
+          title: titleMatch ? titleMatch[1].trim() : null,
+          image: imgMatch ? imgMatch[1] : null,
+          url: linkMatch ? linkMatch[1] : null,
+        };
+        
+        const isDuplicate = results.some(item => 
+          item.url === result.url || 
+          (item.title && item.title === result.title)
+        );
+        
+        if (!isDuplicate && (result.title || result.url)) {
+          results.push(result);
+        }
+      }
     }
-  }
+  });
 
   return {
     baseUrl,
@@ -294,28 +424,30 @@ function parseHTML(html, baseUrl) {
   const linkRegex = /<a\s+[^>]*href=["']([^"']+)["'][^>]*>([^<]*)<\/a>/gi;
   const links = [];
   while ((match = linkRegex.exec(html)) !== null) {
-    links.push({
-      url: match[1],
-      text: match[2].trim(),
-    });
+    if (match[1] && !match[1].startsWith('#')) {
+      links.push({
+        url: match[1],
+        text: match[2].trim(),
+      });
+    }
   }
   
   if (links.length > 0) {
-    data.content.links = links.slice(0, 50); // Limit to first 50 links
+    data.content.links = links.slice(0, 100); // Increased limit
   }
 
   // Extract images
-  const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*alt=["']([^"']*)["'][^>]*>/gi;
+  const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*(?:alt=["']([^"']*)["'])?[^>]*>/gi;
   const images = [];
   while ((match = imgRegex.exec(html)) !== null) {
     images.push({
       src: match[1],
-      alt: match[2],
+      alt: match[2] || '',
     });
   }
   
   if (images.length > 0) {
-    data.content.images = images.slice(0, 20); // Limit to first 20 images
+    data.content.images = images.slice(0, 50); // Increased limit
   }
 
   // Extract scripts
