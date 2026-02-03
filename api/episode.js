@@ -66,25 +66,45 @@ function parseServerNames(serverParam) {
   return serverParam.split(',').map(s => s.trim().toLowerCase());
 }
 
-// Fetch processed iframe URL from API
-async function fetchProcessedIframeUrl(originalUrl) {
+// Extract iframe from HTML (embedded logic)
+async function extractIframeFromUrl(originalUrl) {
   try {
-    const apiUrl = `https://toon-stream-api.vercel.app/api/embed.js?url=${encodeURIComponent(originalUrl)}`;
-    console.log(`Fetching processed iframe from: ${apiUrl}`);
+    console.log(`Extracting iframe from: ${originalUrl}`);
     
-    const response = await axios.get(apiUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    // Parse URL to rebuild it properly
+    const urlObj = new URL(originalUrl);
+    const fullUrl = urlObj.toString();
+    
+    // Fetch the page
+    const response = await axios.get(fullUrl, {
+      headers: { 
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' 
+      },
       timeout: 15000
     });
     
-    if (response.data && response.data.scraped && response.data.scraped.iframe_src) {
-      return response.data.scraped.iframe_src;
-    } else {
-      // If iframe_src is null or missing, use fallback
-      return response.data?.full_url || originalUrl;
+    if (response.status !== 200) {
+      console.error('Failed to fetch page:', response.status);
+      return originalUrl;
     }
+    
+    const html = response.data;
+    
+    // Extract iframe src using regex
+    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+    
+    if (iframeMatch && iframeMatch[1]) {
+      const iframeSrc = iframeMatch[1];
+      console.log(`Extracted iframe: ${iframeSrc}`);
+      return iframeSrc;
+    } else {
+      console.log('No iframe found, using original URL');
+      return originalUrl;
+    }
+    
   } catch (error) {
-    console.error('Error fetching processed iframe URL:', error.message);
+    console.error('Error extracting iframe:', error.message);
+    // Fallback to original URL on error
     return originalUrl;
   }
 }
@@ -191,12 +211,12 @@ async function scrapeServers($) {
     }
   });
   
-  // Process all servers through API
-  console.log(`Processing ${servers.length} servers through API...`);
+  // Process all servers - extract real iframe URLs
+  console.log(`Processing ${servers.length} servers...`);
   for (let i = 0; i < servers.length; i++) {
     if (servers[i].originalSrc) {
-      const processedUrl = await fetchProcessedIframeUrl(servers[i].originalSrc);
-      servers[i].src = processedUrl;
+      const extractedUrl = await extractIframeFromUrl(servers[i].originalSrc);
+      servers[i].src = extractedUrl;
     }
   }
   
