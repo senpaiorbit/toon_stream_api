@@ -41,15 +41,15 @@ async function extractIframeFromUrl(originalUrl) {
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Dest': 'iframe',
         'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-Site': 'cross-site',
         'Cache-Control': 'max-age=0'
       },
       timeout: 15000,
       maxRedirects: 5,
       validateStatus: function (status) {
-        return status >= 200 && status < 500; // Accept any status code less than 500
+        return status >= 200 && status < 500;
       }
     });
     
@@ -197,17 +197,19 @@ async function scrapeVideoOptions($) {
   };
   
   // Language tabs
-  $('.d-flex-ch.mb-10.btr .btn').each((index, element) => {
+  $('.d-flex-ch.mb-10.btr .btn, .d-flex-ch.mb-10.btr span').each((index, element) => {
     const $elem = $(element);
     const language = $elem.text().trim();
     const tabId = $elem.attr('tab');
     const isActive = $elem.hasClass('active');
     
-    videoOptions.languages.push({
-      language: language,
-      tabId: tabId,
-      active: isActive
-    });
+    if (language) {
+      videoOptions.languages.push({
+        language: language,
+        tabId: tabId,
+        active: isActive
+      });
+    }
   });
   
   // Server options
@@ -217,10 +219,14 @@ async function scrapeVideoOptions($) {
     const isActive = $langElem.hasClass('active');
     
     const servers = [];
-    $langElem.find('.aa-tbs li').each((serverIndex, serverElement) => {
+    $langElem.find('.aa-tbs-video li').each((serverIndex, serverElement) => {
       const $serverLink = $(serverElement).find('a');
       const serverNumber = $serverLink.find('span').first().text().trim();
-      const serverName = $serverLink.find('.server').text().trim();
+      const serverName = $serverLink.find('.server').text()
+        .replace('-Hindi-Eng-Jap', '')
+        .replace('-Multi Audio', '')
+        .replace('Multi Audio', '')
+        .trim();
       const targetId = $serverLink.attr('href')?.replace('#', '') || '';
       const isServerActive = $serverLink.hasClass('on');
       
@@ -339,7 +345,8 @@ async function scrapeMoviePage(baseUrl, moviePath) {
         'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'none',
-        'Cache-Control': 'max-age=0'
+        'Cache-Control': 'max-age=0',
+        'Referer': baseUrl
       },
       timeout: 30000,
       maxRedirects: 5
