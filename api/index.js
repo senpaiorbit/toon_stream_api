@@ -4,14 +4,14 @@ export const config = {
 
 const FALLBACK_BASE_URL = "https://toonstream.one";
 
-export default async function handler(request) {
-  const { searchParams } = new URL(request.url);
+export default async function handler(req) {
+  const { searchParams } = new URL(req.url);
   const path = searchParams.get("path") || "/";
   const extract = searchParams.get("extract") || "search";
 
   let baseUrl = FALLBACK_BASE_URL;
 
-  // --- Fetch base URL from GitHub (safe fallback) ---
+  // fetch base url from github (safe)
   try {
     const r = await fetch(
       "https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/main/src/baseurl.txt",
@@ -21,15 +21,12 @@ export default async function handler(request) {
       const t = (await r.text()).trim();
       if (t.startsWith("http")) baseUrl = t;
     }
-  } catch (_) {}
+  } catch {}
 
-  const targetUrl = baseUrl + path;
-
-  const res = await fetch(targetUrl, {
+  const res = await fetch(baseUrl + path, {
     headers: {
       "User-Agent": "Mozilla/5.0",
       Accept: "text/html",
-      Referer: baseUrl,
     },
   });
 
@@ -40,9 +37,9 @@ export default async function handler(request) {
   const html = await res.text();
 
   let data;
-  if (extract === "search") data = extractSearch(html);
-  else if (extract === "anime") data = extractAnimeDetail(html);
-  else data = extractSearch(html); // default
+  if (extract === "site") data = extractSiteDescription(html);
+  else if (extract === "anime") data = extractAnime(html);
+  else data = extractSearch(html);
 
   data.success = true;
   data.baseUrl = baseUrl;
@@ -50,7 +47,7 @@ export default async function handler(request) {
   return json(data);
 }
 
-/* ---------------- UTIL ---------------- */
+/* ---------------- HELPERS ---------------- */
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -63,16 +60,44 @@ function json(data, status = 200) {
   });
 }
 
-/* ---------------- SEARCH / SUGGESTIONS ---------------- */
+function clean(t) {
+  return t ? t.replace(/\s+/g, " ").trim() : null;
+}
+
+/* ---------------- SITE DESCRIPTION ---------------- */
+
+function extractSiteDescription(html) {
+  // Extract visible text inside main container
+  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  if (!bodyMatch) {
+    return { description: null };
+  }
+
+  let text = bodyMatch[1];
+
+  // remove scripts, styles, tags
+  text = text
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ");
+
+  text = clean(text);
+
+  // trim to meaningful SEO content size
+  return {
+    description: text.slice(0, 6000),
+  };
+}
+
+/* ---------------- SEARCH ---------------- */
 
 function extractSearch(html) {
   const results = [];
-
-  const cardRegex =
+  const regex =
     /<a[^>]*href="([^"]+)"[^>]*>[\s\S]*?<img[^>]*src="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([^<]+)<\/h3>[\s\S]*?<p[^>]*>([^<]+)<\/p>/gi;
 
   let m;
-  while ((m = cardRegex.exec(html)) !== null) {
+  while ((m = regex.exec(html)) !== null) {
     results.push({
       title: clean(m[3]),
       description: clean(m[4]),
@@ -89,14 +114,14 @@ function extractSearch(html) {
 
 /* ---------------- ANIME DETAIL ---------------- */
 
-function extractAnimeDetail(html) {
+function extractAnime(html) {
   const title =
     match(html, /<h1[^>]*>([^<]+)<\/h1>/i) ||
     match(html, /<title>([^<]+)<\/title>/i);
 
   const description =
     match(html, /<meta name="description" content="([^"]+)"/i) ||
-    match(html, /<p class="description">([^<]+)<\/p>/i);
+    match(html, /<p[^>]*class="description"[^>]*>([^<]+)<\/p>/i);
 
   const poster = match(html, /<img[^>]*class="poster"[^>]*src="([^"]+)"/i);
 
@@ -120,13 +145,7 @@ function extractAnimeDetail(html) {
   };
 }
 
-/* ---------------- HELPERS ---------------- */
-
 function match(text, regex) {
   const m = text.match(regex);
   return m ? m[1] : null;
-}
-
-function clean(str) {
-  return str ? str.replace(/\s+/g, " ").trim() : null;
 }
