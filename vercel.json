@@ -6,11 +6,11 @@
     },
     {
       "source": "/home",
-      "destination": "/api/index"
+      "destination": "/api/home"
     },
     {
       "source": "/home/",
-      "destination": "/api/index"
+      "destination": "/api/home"
     },
     {
       "source": "/home/search/:query",
