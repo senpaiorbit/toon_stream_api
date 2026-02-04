@@ -2,7 +2,7 @@ export const config = {
   runtime: "edge",
 };
 
-const FALLBACK_BASE_URL = "https://toonstream.one";
+const FALLBACK_BASE_URL = "http://toonstream.dad";
 
 export default async function handler(req) {
   const { searchParams } = new URL(req.url);
