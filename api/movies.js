@@ -1,17 +1,136 @@
-// api/movies.js
-const axios = require('axios');
-const cheerio = require('cheerio');
-const fs = require('fs');
-const path = require('path');
 
-function getBaseUrl() {
+// api/movies.js
+const cheerio = require('cheerio');
+
+// Cache for base URL and proxy URL (5 minutes)
+let baseUrlCache = { url: null, timestamp: 0 };
+let proxyUrlCache = { url: null, timestamp: 0 };
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Fetch base URL from GitHub with caching
+async function getBaseUrl() {
+  const now = Date.now();
+  
+  if (baseUrlCache.url && (now - baseUrlCache.timestamp) < CACHE_DURATION) {
+    return baseUrlCache.url;
+  }
+  
   try {
-    const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
-    const baseUrl = fs.readFileSync(baseUrlPath, 'utf-8').trim();
-    return baseUrl;
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+      }
+    });
+    
+    if (response.ok) {
+      const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
+      baseUrlCache = { url: baseUrl, timestamp: now };
+      return baseUrl;
+    }
   } catch (error) {
-    console.error('Error reading baseurl.txt:', error);
-    return null;
+    console.error('Error fetching base URL from GitHub:', error.message);
+  }
+  
+  // Fallback
+  const fallbackUrl = 'https://toonstream.dad';
+  baseUrlCache = { url: fallbackUrl, timestamp: now };
+  return fallbackUrl;
+}
+
+// Fetch proxy URL from GitHub with caching
+async function getProxyUrl() {
+  const now = Date.now();
+  
+  if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
+    return proxyUrlCache.url;
+  }
+  
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+      }
+    });
+    
+    if (response.ok) {
+      const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
+      proxyUrlCache = { url: proxyUrl, timestamp: now };
+      return proxyUrl;
+    }
+  } catch (error) {
+    console.error('Error fetching proxy URL from GitHub:', error.message);
+  }
+  
+  proxyUrlCache = { url: null, timestamp: now };
+  return null;
+}
+
+// Fetch with proxy fallback
+async function fetchWithProxy(targetUrl, refererUrl = null) {
+  const proxyUrl = await getProxyUrl();
+  
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'max-age=0',
+    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
+  };
+  
+  if (refererUrl) {
+    headers['Referer'] = refererUrl;
+  }
+  
+  // Try proxy first
+  if (proxyUrl) {
+    try {
+      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+      const proxyResponse = await fetch(proxyFetchUrl, {
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000)
+      });
+      
+      if (proxyResponse.ok) {
+        console.log('✓ Proxy fetch successful');
+        return await proxyResponse.text();
+      } else {
+        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
+      }
+    } catch (proxyError) {
+      console.log('✗ Proxy fetch failed:', proxyError.message);
+    }
+  }
+  
+  // Fallback to direct fetch
+  try {
+    const baseUrl = await getBaseUrl();
+    if (!refererUrl) {
+      headers['Referer'] = baseUrl;
+    }
+    
+    const directResponse = await fetch(targetUrl, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(30000)
+    });
+    
+    if (!directResponse.ok) {
+      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
+    }
+    
+    console.log('✓ Direct fetch successful');
+    return await directResponse.text();
+  } catch (directError) {
+    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
   }
 }
 
@@ -23,122 +142,83 @@ function extractImageUrl(imgSrc) {
   return imgSrc;
 }
 
-// Create axios instance with better defaults
-function createAxiosInstance(baseUrl) {
-  return axios.create({
-    timeout: 30000,
-    maxRedirects: 5,
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Sec-Fetch-User': '?1',
-      'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-      'sec-ch-ua-mobile': '?0',
-      'sec-ch-ua-platform': '"Windows"',
-      'Cache-Control': 'max-age=0',
-      'Referer': baseUrl,
-      'DNT': '1'
-    },
-    validateStatus: function (status) {
-      return status >= 200 && status < 500;
-    }
-  });
-}
-
-// Add delay to avoid rate limiting
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Extract iframe from HTML with improved error handling
-async function extractIframeFromUrl(originalUrl, baseUrl, retryCount = 0) {
-  const maxRetries = 2;
-  
+// Extract iframe from HTML (embedded logic with better error handling)
+async function extractIframeFromUrl(originalUrl) {
   try {
-    console.log(`[Attempt ${retryCount + 1}] Extracting iframe from: ${originalUrl}`);
+    console.log(`Extracting iframe from: ${originalUrl}`);
     
-    // Add small delay between requests
-    if (retryCount > 0) {
-      await delay(1000 * retryCount);
-    }
-    
-    const axiosInstance = createAxiosInstance(baseUrl);
-    
-    // Parse URL to rebuild it properly
     const urlObj = new URL(originalUrl);
     const fullUrl = urlObj.toString();
     
-    // Fetch the page with updated headers for iframe context
-    const response = await axiosInstance.get(fullUrl, {
-      headers: {
-        'Sec-Fetch-Dest': 'iframe',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'cross-site',
-        'Referer': baseUrl
-      }
-    });
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+      'Sec-Ch-Ua-Mobile': '?0',
+      'Sec-Ch-Ua-Platform': '"Windows"',
+      'Sec-Fetch-Dest': 'iframe',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'cross-site',
+      'Upgrade-Insecure-Requests': '1',
+      'Cache-Control': 'max-age=0'
+    };
     
-    // Handle different status codes
-    if (response.status === 403) {
-      console.log(`Got 403 for ${originalUrl}`);
-      if (retryCount < maxRetries) {
-        console.log(`Retrying with different approach...`);
-        await delay(2000);
-        return await extractIframeFromUrl(originalUrl, baseUrl, retryCount + 1);
+    const proxyUrl = await getProxyUrl();
+    let html = null;
+    
+    // Try proxy first for iframe extraction
+    if (proxyUrl) {
+      try {
+        const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(fullUrl)}`;
+        const proxyResponse = await fetch(proxyFetchUrl, {
+          headers,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(15000)
+        });
+        
+        if (proxyResponse.ok) {
+          html = await proxyResponse.text();
+        }
+      } catch (proxyError) {
+        console.log('Proxy failed for iframe extraction:', proxyError.message);
       }
-      // After retries, return original URL
+    }
+    
+    // Fallback to direct fetch
+    if (!html) {
+      try {
+        const directResponse = await fetch(fullUrl, {
+          headers,
+          redirect: 'follow',
+          signal: AbortSignal.timeout(15000)
+        });
+        
+        if (directResponse.status === 403 || directResponse.status === 404 || directResponse.status >= 400) {
+          console.log(`Got status ${directResponse.status}, using original URL as fallback`);
+          return originalUrl;
+        }
+        
+        if (directResponse.ok) {
+          html = await directResponse.text();
+        }
+      } catch (directError) {
+        console.error('Error extracting iframe:', directError.message);
+        return originalUrl;
+      }
+    }
+    
+    if (!html) {
       return originalUrl;
     }
     
-    if (response.status === 404 || response.status >= 400) {
-      console.log(`Got status ${response.status}, using original URL as fallback`);
-      return originalUrl;
-    }
+    // Extract iframe src using regex
+    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
     
-    const html = response.data;
-    
-    // Try multiple iframe extraction patterns
-    let iframeSrc = null;
-    
-    // Pattern 1: Standard iframe src
-    const iframeMatch1 = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-    if (iframeMatch1 && iframeMatch1[1]) {
-      iframeSrc = iframeMatch1[1];
-    }
-    
-    // Pattern 2: iframe with data-src
-    if (!iframeSrc) {
-      const iframeMatch2 = html.match(/<iframe[^>]+data-src=["']([^"']+)["']/i);
-      if (iframeMatch2 && iframeMatch2[1]) {
-        iframeSrc = iframeMatch2[1];
-      }
-    }
-    
-    // Pattern 3: Look for video player URLs in script tags
-    if (!iframeSrc) {
-      const scriptMatch = html.match(/(?:src|url)["']?\s*:\s*["']([^"']+\.(?:m3u8|mp4|mkv)[^"']*)["']/i);
-      if (scriptMatch && scriptMatch[1]) {
-        iframeSrc = scriptMatch[1];
-      }
-    }
-    
-    if (iframeSrc) {
-      // Handle relative URLs
-      if (iframeSrc.startsWith('//')) {
-        iframeSrc = 'https:' + iframeSrc;
-      } else if (iframeSrc.startsWith('/')) {
-        const urlBase = new URL(originalUrl);
-        iframeSrc = urlBase.origin + iframeSrc;
-      }
-      
-      console.log(`✓ Extracted iframe: ${iframeSrc}`);
+    if (iframeMatch && iframeMatch[1]) {
+      const iframeSrc = iframeMatch[1];
+      console.log(`Extracted iframe: ${iframeSrc}`);
       return iframeSrc;
     } else {
       console.log('No iframe found, using original URL');
@@ -146,16 +226,7 @@ async function extractIframeFromUrl(originalUrl, baseUrl, retryCount = 0) {
     }
     
   } catch (error) {
-    console.error(`Error extracting iframe (attempt ${retryCount + 1}):`, error.message);
-    
-    // Retry on network errors
-    if (retryCount < maxRetries && (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT')) {
-      console.log(`Network error, retrying...`);
-      await delay(2000);
-      return await extractIframeFromUrl(originalUrl, baseUrl, retryCount + 1);
-    }
-    
-    // Fallback to original URL on any error
+    console.error('Error extracting iframe:', error.message);
     return originalUrl;
   }
 }
@@ -269,8 +340,8 @@ function scrapeMovieDetails($) {
   return movie;
 }
 
-// Scrape video/streaming options with parallel processing limit
-async function scrapeVideoOptions($, baseUrl) {
+// Scrape video/streaming options
+async function scrapeVideoOptions($) {
   const videoOptions = {
     languages: [],
     servers: []
@@ -342,31 +413,12 @@ async function scrapeVideoOptions($, baseUrl) {
     });
   });
   
-  // Process iframes with concurrency limit and delays
+  // Process all iframes to extract real URLs
   console.log(`Processing ${iframes.length} video iframes...`);
-  const concurrencyLimit = 3; // Process max 3 at a time
-  
-  for (let i = 0; i < iframes.length; i += concurrencyLimit) {
-    const batch = iframes.slice(i, i + concurrencyLimit);
-    
-    // Process batch in parallel
-    await Promise.all(
-      batch.map(async (iframe) => {
-        if (iframe.originalSrc) {
-          try {
-            const extractedUrl = await extractIframeFromUrl(iframe.originalSrc, baseUrl);
-            iframe.src = extractedUrl;
-          } catch (error) {
-            console.error(`Failed to extract iframe for ${iframe.optionId}:`, error.message);
-            iframe.src = iframe.originalSrc; // Fallback to original
-          }
-        }
-      })
-    );
-    
-    // Add delay between batches to avoid rate limiting
-    if (i + concurrencyLimit < iframes.length) {
-      await delay(1500);
+  for (let i = 0; i < iframes.length; i++) {
+    if (iframes[i].originalSrc) {
+      const extractedUrl = await extractIframeFromUrl(iframes[i].originalSrc);
+      iframes[i].src = extractedUrl;
     }
   }
   
@@ -427,58 +479,14 @@ function scrapeRelatedMovies($) {
   return relatedMovies;
 }
 
-// Main scraper function with retry logic
-async function scrapeMoviePage(baseUrl, moviePath, retryCount = 0) {
-  const maxRetries = 2;
-  
+// Main scraper function
+async function scrapeMoviePage(baseUrl, moviePath) {
   try {
     const movieUrl = `${baseUrl}/movies/${moviePath}`;
-    console.log(`[Attempt ${retryCount + 1}] Scraping: ${movieUrl}`);
+    console.log(`Scraping: ${movieUrl}`);
     
-    // Add delay on retries
-    if (retryCount > 0) {
-      await delay(2000 * retryCount);
-    }
-    
-    const axiosInstance = createAxiosInstance(baseUrl);
-    
-    const response = await axiosInstance.get(movieUrl);
-    
-    // Handle 403 with retry
-    if (response.status === 403) {
-      console.log('Received 403 Forbidden');
-      if (retryCount < maxRetries) {
-        console.log(`Retrying... (${retryCount + 1}/${maxRetries})`);
-        await delay(3000);
-        return await scrapeMoviePage(baseUrl, moviePath, retryCount + 1);
-      }
-      return {
-        success: false,
-        error: 'Access forbidden (403). The website is blocking requests after multiple attempts.',
-        statusCode: 403,
-        suggestion: 'Try again later or use a different network/proxy.'
-      };
-    }
-    
-    // Handle 404
-    if (response.status === 404) {
-      return {
-        success: false,
-        error: 'Movie not found',
-        statusCode: 404
-      };
-    }
-    
-    // Handle other errors
-    if (response.status >= 400) {
-      return {
-        success: false,
-        error: `HTTP Error ${response.status}`,
-        statusCode: response.status
-      };
-    }
-    
-    const $ = cheerio.load(response.data);
+    const html = await fetchWithProxy(movieUrl, baseUrl);
+    const $ = cheerio.load(html);
     
     // Get post ID from body class
     const bodyClass = $('body').attr('class') || '';
@@ -492,7 +500,7 @@ async function scrapeMoviePage(baseUrl, moviePath, retryCount = 0) {
       postId: postId,
       scrapedAt: new Date().toISOString(),
       movieDetails: scrapeMovieDetails($),
-      videoOptions: await scrapeVideoOptions($, baseUrl),
+      videoOptions: await scrapeVideoOptions($),
       comments: scrapeComments($),
       relatedMovies: scrapeRelatedMovies($)
     };
@@ -512,14 +520,7 @@ async function scrapeMoviePage(baseUrl, moviePath, retryCount = 0) {
   } catch (error) {
     console.error('Scraping error:', error.message);
     
-    // Retry on network errors
-    if (retryCount < maxRetries && (error.code === 'ECONNRESET' || error.code === 'ETIMEDOUT')) {
-      console.log(`Network error, retrying... (${retryCount + 1}/${maxRetries})`);
-      await delay(3000);
-      return await scrapeMoviePage(baseUrl, moviePath, retryCount + 1);
-    }
-    
-    if (error.response && error.response.status === 404) {
+    if (error.message.includes('404')) {
       return {
         success: false,
         error: 'Movie not found',
@@ -527,24 +528,17 @@ async function scrapeMoviePage(baseUrl, moviePath, retryCount = 0) {
       };
     }
     
-    if (error.response && error.response.status === 403) {
-      if (retryCount < maxRetries) {
-        console.log(`403 error, retrying... (${retryCount + 1}/${maxRetries})`);
-        await delay(3000);
-        return await scrapeMoviePage(baseUrl, moviePath, retryCount + 1);
-      }
+    if (error.message.includes('403')) {
       return {
         success: false,
-        error: 'Access forbidden (403). The website is blocking requests.',
-        statusCode: 403,
-        suggestion: 'Try again later or use a different approach.'
+        error: 'Access forbidden (403). The website may be blocking requests.',
+        statusCode: 403
       };
     }
     
     return {
       success: false,
-      error: error.message,
-      errorCode: error.code
+      error: error.message
     };
   }
 }
@@ -555,6 +549,7 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
   
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -569,12 +564,12 @@ module.exports = async (req, res) => {
   }
   
   try {
-    const baseUrl = getBaseUrl();
+    const baseUrl = await getBaseUrl();
     
     if (!baseUrl) {
       return res.status(500).json({ 
         success: false, 
-        error: 'Base URL not found. Please check src/baseurl.txt file.' 
+        error: 'Base URL not found.' 
       });
     }
     
@@ -584,8 +579,7 @@ module.exports = async (req, res) => {
     if (!moviePath) {
       return res.status(400).json({
         success: false,
-        error: 'Movie path is required. Use ?path=movie-name',
-        example: '/api/movies?path=spider-man-across-the-spider-verse-2023'
+        error: 'Movie path is required. Use ?path=movie-name'
       });
     }
     
