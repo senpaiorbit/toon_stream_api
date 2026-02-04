@@ -64,13 +64,14 @@ async function getProxyUrl() {
   return null;
 }
 
-// Fetch with proxy fallback
+// Fetch with proxy fallback - CLOUDFLARE WORKER RETURNS HTML AS TEXT/PLAIN
 async function fetchWithProxy(targetUrl) {
   const proxyUrl = await getProxyUrl();
+  const baseUrl = await getBaseUrl();
   
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
     'Cache-Control': 'max-age=0',
@@ -81,10 +82,11 @@ async function fetchWithProxy(targetUrl) {
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'none',
     'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1'
+    'Upgrade-Insecure-Requests': '1',
+    'Referer': baseUrl
   };
   
-  // Try proxy first
+  // Try proxy first - CONSUME AS TEXT (Cloudflare returns text/plain)
   if (proxyUrl) {
     try {
       const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
@@ -95,8 +97,9 @@ async function fetchWithProxy(targetUrl) {
       });
       
       if (proxyResponse.ok) {
-        console.log('✓ Proxy fetch successful');
-        return await proxyResponse.text();
+        const html = await proxyResponse.text();
+        console.log('✓ Proxy fetch successful (HTML as text/plain)');
+        return html;
       } else {
         console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
       }
@@ -107,9 +110,6 @@ async function fetchWithProxy(targetUrl) {
   
   // Fallback to direct fetch
   try {
-    const baseUrl = await getBaseUrl();
-    headers['Referer'] = baseUrl;
-    
     const directResponse = await fetch(targetUrl, {
       headers,
       redirect: 'follow',
@@ -120,8 +120,9 @@ async function fetchWithProxy(targetUrl) {
       throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
     }
     
+    const html = await directResponse.text();
     console.log('✓ Direct fetch successful');
-    return await directResponse.text();
+    return html;
   } catch (directError) {
     throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
   }
