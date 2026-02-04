@@ -1,17 +1,129 @@
 // api/series_page.js
-const axios = require('axios');
 const cheerio = require('cheerio');
-const fs = require('fs');
-const path = require('path');
 
-function getBaseUrl() {
+// Cache for base URL and proxy URL (5 minutes)
+let baseUrlCache = { url: null, timestamp: 0 };
+let proxyUrlCache = { url: null, timestamp: 0 };
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+// Fetch base URL from GitHub with caching
+async function getBaseUrl() {
+  const now = Date.now();
+  
+  if (baseUrlCache.url && (now - baseUrlCache.timestamp) < CACHE_DURATION) {
+    return baseUrlCache.url;
+  }
+  
   try {
-    const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
-    const baseUrl = fs.readFileSync(baseUrlPath, 'utf-8').trim();
-    return baseUrl;
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+      }
+    });
+    
+    if (response.ok) {
+      const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
+      baseUrlCache = { url: baseUrl, timestamp: now };
+      return baseUrl;
+    }
   } catch (error) {
-    console.error('Error reading baseurl.txt:', error);
-    return null;
+    console.error('Error fetching base URL from GitHub:', error.message);
+  }
+  
+  // Fallback
+  const fallbackUrl = 'https://toonstream.dad';
+  baseUrlCache = { url: fallbackUrl, timestamp: now };
+  return fallbackUrl;
+}
+
+// Fetch proxy URL from GitHub with caching
+async function getProxyUrl() {
+  const now = Date.now();
+  
+  if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
+    return proxyUrlCache.url;
+  }
+  
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+      }
+    });
+    
+    if (response.ok) {
+      const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
+      proxyUrlCache = { url: proxyUrl, timestamp: now };
+      return proxyUrl;
+    }
+  } catch (error) {
+    console.error('Error fetching proxy URL from GitHub:', error.message);
+  }
+  
+  proxyUrlCache = { url: null, timestamp: now };
+  return null;
+}
+
+// Fetch with proxy fallback
+async function fetchWithProxy(targetUrl) {
+  const proxyUrl = await getProxyUrl();
+  
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'max-age=0',
+    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Upgrade-Insecure-Requests': '1'
+  };
+  
+  // Try proxy first
+  if (proxyUrl) {
+    try {
+      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+      const proxyResponse = await fetch(proxyFetchUrl, {
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000)
+      });
+      
+      if (proxyResponse.ok) {
+        console.log('✓ Proxy fetch successful');
+        return await proxyResponse.text();
+      } else {
+        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
+      }
+    } catch (proxyError) {
+      console.log('✗ Proxy fetch failed:', proxyError.message);
+    }
+  }
+  
+  // Fallback to direct fetch
+  try {
+    const baseUrl = await getBaseUrl();
+    headers['Referer'] = baseUrl;
+    
+    const directResponse = await fetch(targetUrl, {
+      headers,
+      redirect: 'follow',
+      signal: AbortSignal.timeout(30000)
+    });
+    
+    if (!directResponse.ok) {
+      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
+    }
+    
+    console.log('✓ Direct fetch successful');
+    return await directResponse.text();
+  } catch (directError) {
+    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
   }
 }
 
@@ -190,14 +302,8 @@ async function scrapeSeriesPage(baseUrl, pageNumber = 1) {
     
     console.log(`Scraping: ${seriesUrl}`);
     
-    const response = await axios.get(seriesUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      },
-      timeout: 30000
-    });
-    
-    const $ = cheerio.load(response.data);
+    const html = await fetchWithProxy(seriesUrl);
+    const $ = cheerio.load(html);
     const pageTitle = $('.section-title').first().text().trim();
     
     const data = {
@@ -237,6 +343,7 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
   
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -251,12 +358,12 @@ module.exports = async (req, res) => {
   }
   
   try {
-    const baseUrl = getBaseUrl();
+    const baseUrl = await getBaseUrl();
     
     if (!baseUrl) {
       return res.status(500).json({ 
         success: false, 
-        error: 'Base URL not found. Please check src/baseurl.txt file.' 
+        error: 'Base URL not found.' 
       });
     }
     
