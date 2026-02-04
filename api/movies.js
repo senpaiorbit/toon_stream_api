@@ -23,20 +23,39 @@ function extractImageUrl(imgSrc) {
   return imgSrc;
 }
 
-// Extract iframe from HTML (embedded logic with better error handling)
-async function extractIframeFromUrl(originalUrl) {
+// Generate random user agents
+function getRandomUserAgent() {
+  const userAgents = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+  ];
+  return userAgents[Math.floor(Math.random() * userAgents.length)];
+}
+
+// Add delay between requests
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Extract iframe from HTML with better anti-detection
+async function extractIframeFromUrl(originalUrl, referer) {
   try {
     console.log(`Extracting iframe from: ${originalUrl}`);
     
-    // Parse URL to rebuild it properly
+    // Add random delay to avoid rate limiting
+    await delay(Math.random() * 1000 + 500);
+    
     const urlObj = new URL(originalUrl);
     const fullUrl = urlObj.toString();
     
-    // Fetch the page with comprehensive headers
+    // Create axios instance with cookie jar simulation
     const response = await axios.get(fullUrl, {
       headers: { 
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'User-Agent': getRandomUserAgent(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
@@ -44,16 +63,26 @@ async function extractIframeFromUrl(originalUrl) {
         'Sec-Fetch-Dest': 'iframe',
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'cross-site',
-        'Cache-Control': 'max-age=0'
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+        'Referer': referer || 'https://www.google.com/',
+        'DNT': '1',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"'
       },
-      timeout: 15000,
+      timeout: 20000,
       maxRedirects: 5,
       validateStatus: function (status) {
         return status >= 200 && status < 500;
-      }
+      },
+      // Important: handle cookies
+      withCredentials: true,
+      // Follow redirects
+      maxContentLength: 50 * 1024 * 1024,
+      maxBodyLength: 50 * 1024 * 1024
     });
     
-    // If we got a 403 or other error, fallback to original URL
     if (response.status === 403 || response.status === 404 || response.status >= 400) {
       console.log(`Got status ${response.status}, using original URL as fallback`);
       return originalUrl;
@@ -61,21 +90,28 @@ async function extractIframeFromUrl(originalUrl) {
     
     const html = response.data;
     
-    // Extract iframe src using regex
-    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+    // Multiple patterns to find iframe
+    const iframePatterns = [
+      /<iframe[^>]+src=["']([^"']+)["']/i,
+      /<iframe[^>]+data-src=["']([^"']+)["']/i,
+      /src:\s*["']([^"']+)["']/i,
+      /"iframe":\s*["']([^"']+)["']/i
+    ];
     
-    if (iframeMatch && iframeMatch[1]) {
-      const iframeSrc = iframeMatch[1];
-      console.log(`Extracted iframe: ${iframeSrc}`);
-      return iframeSrc;
-    } else {
-      console.log('No iframe found, using original URL');
-      return originalUrl;
+    for (const pattern of iframePatterns) {
+      const match = html.match(pattern);
+      if (match && match[1]) {
+        const iframeSrc = match[1];
+        console.log(`Extracted iframe: ${iframeSrc}`);
+        return iframeSrc;
+      }
     }
+    
+    console.log('No iframe found, using original URL');
+    return originalUrl;
     
   } catch (error) {
     console.error('Error extracting iframe:', error.message);
-    // Fallback to original URL on any error
     return originalUrl;
   }
 }
@@ -84,18 +120,15 @@ async function extractIframeFromUrl(originalUrl) {
 function scrapeMovieDetails($) {
   const movie = {};
   
-  // Basic info
   movie.title = $('.entry-title').first().text().trim();
   movie.posterImage = extractImageUrl($('.post-thumbnail img').attr('src'));
   movie.posterAlt = $('.post-thumbnail img').attr('alt') || '';
   
-  // Backdrop images
   movie.backdrop = {
     header: extractImageUrl($('.bghd .TPostBg').attr('src')) || null,
     footer: extractImageUrl($('.bgft .TPostBg').attr('src')) || null
   };
   
-  // Genres
   movie.genres = [];
   $('.entry-meta .genres a').each((index, element) => {
     movie.genres.push({
@@ -104,7 +137,6 @@ function scrapeMovieDetails($) {
     });
   });
   
-  // Tags
   movie.tags = [];
   $('.entry-meta .tag a').each((index, element) => {
     movie.tags.push({
@@ -113,15 +145,12 @@ function scrapeMovieDetails($) {
     });
   });
   
-  // Duration
   const durationText = $('.entry-meta .duration').text().trim();
   movie.duration = durationText;
   
-  // Year
   const yearText = $('.entry-meta .year').text().trim();
   movie.year = yearText;
   
-  // Description
   const descriptionParagraphs = [];
   $('.description p').each((index, element) => {
     const text = $(element).text().trim();
@@ -132,7 +161,6 @@ function scrapeMovieDetails($) {
   movie.description = descriptionParagraphs[0] || '';
   movie.additionalInfo = descriptionParagraphs.slice(1);
   
-  // Extract language, quality, running time from description
   movie.language = null;
   movie.quality = null;
   movie.runningTime = null;
@@ -149,7 +177,6 @@ function scrapeMovieDetails($) {
     }
   });
   
-  // Directors
   movie.directors = [];
   $('.cast-lst li').each((index, element) => {
     const $elem = $(element);
@@ -165,7 +192,6 @@ function scrapeMovieDetails($) {
     }
   });
   
-  // Cast
   movie.cast = [];
   $('.cast-lst li').each((index, element) => {
     const $elem = $(element);
@@ -181,7 +207,6 @@ function scrapeMovieDetails($) {
     }
   });
   
-  // Rating
   const ratingText = $('.vote-cn .vote .num').text().trim();
   movie.rating = ratingText || null;
   movie.ratingSource = $('.vote-cn .vote span').last().text().trim() || 'TMDB';
@@ -190,13 +215,12 @@ function scrapeMovieDetails($) {
 }
 
 // Scrape video/streaming options
-async function scrapeVideoOptions($) {
+async function scrapeVideoOptions($, movieUrl) {
   const videoOptions = {
     languages: [],
     servers: []
   };
   
-  // Language tabs
   $('.d-flex-ch.mb-10.btr .btn, .d-flex-ch.mb-10.btr span').each((index, element) => {
     const $elem = $(element);
     const language = $elem.text().trim();
@@ -212,7 +236,6 @@ async function scrapeVideoOptions($) {
     }
   });
   
-  // Server options
   $('.lrt').each((langIndex, langElement) => {
     const $langElem = $(langElement);
     const langId = $langElem.attr('id');
@@ -245,7 +268,6 @@ async function scrapeVideoOptions($) {
     });
   });
   
-  // Video iframes - extract original URLs first
   const iframes = [];
   $('.video-player .video').each((index, element) => {
     const $elem = $(element);
@@ -262,11 +284,10 @@ async function scrapeVideoOptions($) {
     });
   });
   
-  // Process all iframes to extract real URLs
   console.log(`Processing ${iframes.length} video iframes...`);
   for (let i = 0; i < iframes.length; i++) {
     if (iframes[i].originalSrc) {
-      const extractedUrl = await extractIframeFromUrl(iframes[i].originalSrc);
+      const extractedUrl = await extractIframeFromUrl(iframes[i].originalSrc, movieUrl);
       iframes[i].src = extractedUrl;
     }
   }
@@ -328,16 +349,19 @@ function scrapeRelatedMovies($) {
   return relatedMovies;
 }
 
-// Main scraper function
+// Main scraper function with anti-detection
 async function scrapeMoviePage(baseUrl, moviePath) {
   try {
     const movieUrl = `${baseUrl}/movies/${moviePath}`;
     console.log(`Scraping: ${movieUrl}`);
     
+    // Add random delay before request
+    await delay(Math.random() * 2000 + 1000);
+    
     const response = await axios.get(movieUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'User-Agent': getRandomUserAgent(),
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
@@ -345,16 +369,53 @@ async function scrapeMoviePage(baseUrl, moviePath) {
         'Sec-Fetch-Dest': 'document',
         'Sec-Fetch-Mode': 'navigate',
         'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
         'Cache-Control': 'max-age=0',
-        'Referer': baseUrl
+        'DNT': '1',
+        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        // Critical: Add referer to appear more legitimate
+        'Referer': baseUrl + '/'
       },
       timeout: 30000,
-      maxRedirects: 5
+      maxRedirects: 5,
+      // Important for cookies
+      withCredentials: true,
+      // Validate all status codes to handle them manually
+      validateStatus: function (status) {
+        return status >= 200 && status < 600;
+      }
     });
+    
+    // Handle different status codes
+    if (response.status === 403) {
+      return {
+        success: false,
+        error: 'Access forbidden (403). Try using a proxy or VPN.',
+        statusCode: 403,
+        suggestion: 'The website is blocking direct requests. Consider deploying on Vercel with different IP addresses or using a proxy service.'
+      };
+    }
+    
+    if (response.status === 404) {
+      return {
+        success: false,
+        error: 'Movie not found (404)',
+        statusCode: 404
+      };
+    }
+    
+    if (response.status >= 500) {
+      return {
+        success: false,
+        error: `Server error (${response.status})`,
+        statusCode: response.status
+      };
+    }
     
     const $ = cheerio.load(response.data);
     
-    // Get post ID from body class
     const bodyClass = $('body').attr('class') || '';
     const postIdMatch = bodyClass.match(/postid-(\d+)/);
     const postId = postIdMatch ? postIdMatch[1] : null;
@@ -366,7 +427,7 @@ async function scrapeMoviePage(baseUrl, moviePath) {
       postId: postId,
       scrapedAt: new Date().toISOString(),
       movieDetails: scrapeMovieDetails($),
-      videoOptions: await scrapeVideoOptions($),
+      videoOptions: await scrapeVideoOptions($, movieUrl),
       comments: scrapeComments($),
       relatedMovies: scrapeRelatedMovies($)
     };
@@ -386,25 +447,26 @@ async function scrapeMoviePage(baseUrl, moviePath) {
   } catch (error) {
     console.error('Scraping error:', error.message);
     
-    if (error.response && error.response.status === 404) {
+    if (error.code === 'ECONNREFUSED') {
       return {
         success: false,
-        error: 'Movie not found',
-        statusCode: 404
+        error: 'Connection refused. The server may be down.',
+        details: error.message
       };
     }
     
-    if (error.response && error.response.status === 403) {
+    if (error.code === 'ETIMEDOUT') {
       return {
         success: false,
-        error: 'Access forbidden (403). The website may be blocking requests.',
-        statusCode: 403
+        error: 'Request timeout. The server took too long to respond.',
+        details: error.message
       };
     }
     
     return {
       success: false,
-      error: error.message
+      error: error.message,
+      type: error.code || 'UNKNOWN_ERROR'
     };
   }
 }
@@ -438,13 +500,13 @@ module.exports = async (req, res) => {
       });
     }
     
-    // Get movie path from query parameter
     const moviePath = req.query.path;
     
     if (!moviePath) {
       return res.status(400).json({
         success: false,
-        error: 'Movie path is required. Use ?path=movie-name'
+        error: 'Movie path is required. Use ?path=movie-name',
+        example: '/api/movies?path=avatar-2009'
       });
     }
     
