@@ -4,6 +4,11 @@ const cheerio = require('cheerio');
 const fs = require('fs');
 const path = require('path');
 
+// Cache for proxies
+let proxyCache = [];
+let proxyCacheTime = 0;
+const PROXY_CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 function getBaseUrl() {
   try {
     const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
@@ -23,6 +28,75 @@ function extractImageUrl(imgSrc) {
   return imgSrc;
 }
 
+// Fetch proxies from GeoNode API
+async function fetchProxies() {
+  try {
+    // Check cache first
+    const now = Date.now();
+    if (proxyCache.length > 0 && (now - proxyCacheTime) < PROXY_CACHE_DURATION) {
+      console.log(`Using cached proxies (${proxyCache.length} available)`);
+      return proxyCache;
+    }
+
+    console.log('Fetching fresh proxies from GeoNode...');
+    const response = await axios.get('https://proxylist.geonode.com/api/proxy-list', {
+      params: {
+        limit: 500,
+        page: 1,
+        sort_by: 'lastChecked',
+        sort_type: 'desc',
+        protocols: 'http,https', // Only HTTP/HTTPS proxies
+        filterUpTime: 90, // Only proxies with 90%+ uptime
+        speed: 'fast' // Fast proxies only
+      },
+      timeout: 10000
+    });
+
+    if (response.data && response.data.data) {
+      // Filter for working HTTP/HTTPS proxies
+      proxyCache = response.data.data.filter(proxy => {
+        return proxy.protocols && 
+               (proxy.protocols.includes('http') || proxy.protocols.includes('https')) &&
+               proxy.upTime >= 90 &&
+               proxy.speed >= 1;
+      }).map(proxy => ({
+        host: proxy.ip,
+        port: proxy.port,
+        protocol: proxy.protocols.includes('https') ? 'https' : 'http',
+        country: proxy.country,
+        upTime: proxy.upTime,
+        speed: proxy.speed
+      }));
+
+      proxyCacheTime = now;
+      console.log(`Fetched ${proxyCache.length} working proxies`);
+      return proxyCache;
+    }
+
+    return [];
+  } catch (error) {
+    console.error('Error fetching proxies:', error.message);
+    return proxyCache; // Return cached proxies if fetch fails
+  }
+}
+
+// Get a random working proxy
+async function getRandomProxy() {
+  const proxies = await fetchProxies();
+  
+  if (proxies.length === 0) {
+    console.log('No proxies available, proceeding without proxy');
+    return null;
+  }
+
+  // Get a random proxy from the top 50 fastest
+  const topProxies = proxies.slice(0, Math.min(50, proxies.length));
+  const randomProxy = topProxies[Math.floor(Math.random() * topProxies.length)];
+  
+  console.log(`Using proxy: ${randomProxy.host}:${randomProxy.port} (${randomProxy.country})`);
+  return randomProxy;
+}
+
 // Generate random user agents
 function getRandomUserAgent() {
   const userAgents = [
@@ -30,7 +104,8 @@ function getRandomUserAgent() {
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   ];
   return userAgents[Math.floor(Math.random() * userAgents.length)];
 }
@@ -40,48 +115,102 @@ function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Extract iframe from HTML with better anti-detection
+// Make request with automatic proxy retry
+async function makeRequestWithProxy(url, options = {}, maxRetries = 3) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const proxy = await getRandomProxy();
+      
+      const requestConfig = {
+        ...options,
+        headers: {
+          'User-Agent': getRandomUserAgent(),
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Upgrade-Insecure-Requests': '1',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-User': '?1',
+          'Cache-Control': 'max-age=0',
+          'DNT': '1',
+          'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120"',
+          'Sec-Ch-Ua-Mobile': '?0',
+          'Sec-Ch-Ua-Platform': '"Windows"',
+          ...options.headers
+        },
+        timeout: 30000,
+        maxRedirects: 5,
+        validateStatus: function (status) {
+          return status >= 200 && status < 600;
+        }
+      };
+
+      // Add proxy if available
+      if (proxy) {
+        requestConfig.proxy = {
+          host: proxy.host,
+          port: parseInt(proxy.port),
+          protocol: proxy.protocol
+        };
+      }
+
+      console.log(`Attempt ${attempt + 1}/${maxRetries} - Fetching: ${url}`);
+      const response = await axios.get(url, requestConfig);
+
+      // Check if we got a valid response
+      if (response.status === 200) {
+        console.log('✓ Request successful');
+        return response;
+      }
+
+      if (response.status === 403) {
+        console.log(`✗ Got 403, trying different proxy (attempt ${attempt + 1})`);
+        lastError = { status: 403, message: 'Access forbidden' };
+        await delay(1000 + Math.random() * 2000);
+        continue;
+      }
+
+      if (response.status === 404) {
+        return response; // Don't retry 404s
+      }
+
+      // For other errors, retry with different proxy
+      lastError = { status: response.status, message: `HTTP ${response.status}` };
+      await delay(1000 + Math.random() * 2000);
+
+    } catch (error) {
+      console.log(`✗ Request failed: ${error.message} (attempt ${attempt + 1})`);
+      lastError = error;
+      
+      // Add delay before retry
+      if (attempt < maxRetries - 1) {
+        await delay(2000 + Math.random() * 3000);
+      }
+    }
+  }
+
+  // All retries failed
+  throw lastError || new Error('All proxy attempts failed');
+}
+
+// Extract iframe from HTML with proxy support
 async function extractIframeFromUrl(originalUrl, referer) {
   try {
     console.log(`Extracting iframe from: ${originalUrl}`);
     
-    // Add random delay to avoid rate limiting
     await delay(Math.random() * 1000 + 500);
     
-    const urlObj = new URL(originalUrl);
-    const fullUrl = urlObj.toString();
-    
-    // Create axios instance with cookie jar simulation
-    const response = await axios.get(fullUrl, {
-      headers: { 
-        'User-Agent': getRandomUserAgent(),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'iframe',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'cross-site',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
+    const response = await makeRequestWithProxy(originalUrl, {
+      headers: {
         'Referer': referer || 'https://www.google.com/',
-        'DNT': '1',
-        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"'
-      },
-      timeout: 20000,
-      maxRedirects: 5,
-      validateStatus: function (status) {
-        return status >= 200 && status < 500;
-      },
-      // Important: handle cookies
-      withCredentials: true,
-      // Follow redirects
-      maxContentLength: 50 * 1024 * 1024,
-      maxBodyLength: 50 * 1024 * 1024
-    });
+        'Sec-Fetch-Dest': 'iframe'
+      }
+    }, 2); // Only 2 retries for iframes
     
     if (response.status === 403 || response.status === 404 || response.status >= 400) {
       console.log(`Got status ${response.status}, using original URL as fallback`);
@@ -90,7 +219,6 @@ async function extractIframeFromUrl(originalUrl, referer) {
     
     const html = response.data;
     
-    // Multiple patterns to find iframe
     const iframePatterns = [
       /<iframe[^>]+src=["']([^"']+)["']/i,
       /<iframe[^>]+data-src=["']([^"']+)["']/i,
@@ -285,11 +413,24 @@ async function scrapeVideoOptions($, movieUrl) {
   });
   
   console.log(`Processing ${iframes.length} video iframes...`);
-  for (let i = 0; i < iframes.length; i++) {
-    if (iframes[i].originalSrc) {
-      const extractedUrl = await extractIframeFromUrl(iframes[i].originalSrc, movieUrl);
-      iframes[i].src = extractedUrl;
+  
+  // Process iframes with limited concurrency to avoid overwhelming proxies
+  const processIframe = async (iframe) => {
+    if (iframe.originalSrc) {
+      try {
+        const extractedUrl = await extractIframeFromUrl(iframe.originalSrc, movieUrl);
+        iframe.src = extractedUrl;
+      } catch (error) {
+        console.error(`Failed to extract iframe for ${iframe.optionId}:`, error.message);
+        iframe.src = iframe.originalSrc;
+      }
     }
+  };
+
+  // Process 3 iframes at a time
+  for (let i = 0; i < iframes.length; i += 3) {
+    const batch = iframes.slice(i, i + 3);
+    await Promise.all(batch.map(processIframe));
   }
   
   videoOptions.iframes = iframes;
@@ -349,52 +490,26 @@ function scrapeRelatedMovies($) {
   return relatedMovies;
 }
 
-// Main scraper function with anti-detection
+// Main scraper function with proxy support
 async function scrapeMoviePage(baseUrl, moviePath) {
   try {
     const movieUrl = `${baseUrl}/movies/${moviePath}`;
     console.log(`Scraping: ${movieUrl}`);
     
-    // Add random delay before request
     await delay(Math.random() * 2000 + 1000);
     
-    const response = await axios.get(movieUrl, {
+    const response = await makeRequestWithProxy(movieUrl, {
       headers: {
-        'User-Agent': getRandomUserAgent(),
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
-        'DNT': '1',
-        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'Sec-Ch-Ua-Mobile': '?0',
-        'Sec-Ch-Ua-Platform': '"Windows"',
-        // Critical: Add referer to appear more legitimate
         'Referer': baseUrl + '/'
-      },
-      timeout: 30000,
-      maxRedirects: 5,
-      // Important for cookies
-      withCredentials: true,
-      // Validate all status codes to handle them manually
-      validateStatus: function (status) {
-        return status >= 200 && status < 600;
       }
     });
     
-    // Handle different status codes
     if (response.status === 403) {
       return {
         success: false,
-        error: 'Access forbidden (403). Try using a proxy or VPN.',
+        error: 'Access forbidden (403) after multiple proxy attempts.',
         statusCode: 403,
-        suggestion: 'The website is blocking direct requests. Consider deploying on Vercel with different IP addresses or using a proxy service.'
+        suggestion: 'All available proxies were blocked. Try again later or the website may require CAPTCHA solving.'
       };
     }
     
@@ -445,7 +560,7 @@ async function scrapeMoviePage(baseUrl, moviePath) {
     };
     
   } catch (error) {
-    console.error('Scraping error:', error.message);
+    console.error('Scraping error:', error);
     
     if (error.code === 'ECONNREFUSED') {
       return {
@@ -462,10 +577,18 @@ async function scrapeMoviePage(baseUrl, moviePath) {
         details: error.message
       };
     }
+
+    if (error.status === 403) {
+      return {
+        success: false,
+        error: 'Access forbidden (403) after multiple attempts.',
+        statusCode: 403
+      };
+    }
     
     return {
       success: false,
-      error: error.message,
+      error: error.message || 'Unknown error occurred',
       type: error.code || 'UNKNOWN_ERROR'
     };
   }
