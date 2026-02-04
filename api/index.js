@@ -2,34 +2,47 @@ export const config = {
   runtime: "edge",
 };
 
-const FALLBACK_BASE_URL = "http://toonstream.dad";
+const FALLBACK_BASE_URL = "https://toonstream.dad";
+
+/* ---------------- MAIN HANDLER ---------------- */
 
 export default async function handler(req) {
   const { searchParams } = new URL(req.url);
   const path = searchParams.get("path") || "/";
 
-  let baseUrl = FALLBACK_BASE_URL;
+  const baseUrl = await getBaseUrl();
+  const proxyUrl = await getCfProxy();
 
-  // fetch base url safely
-  try {
-    const r = await fetch(
-      "https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/main/src/baseurl.txt"
+  // ---- Build URLs
+  const targetPath =
+    path.startsWith("/") ? path : "/" + path;
+
+  const proxyTarget =
+    proxyUrl
+      ? proxyUrl + "?url=" + encodeURIComponent(baseUrl + targetPath)
+      : null;
+
+  let res;
+
+  // ---- 1️⃣ Try CF proxy first
+  if (proxyTarget) {
+    try {
+      res = await fetch(proxyTarget, browserHeaders());
+    } catch {}
+  }
+
+  // ---- 2️⃣ Fallback to direct origin
+  if (!res || !res.ok) {
+    try {
+      res = await fetch(baseUrl + targetPath, browserHeaders());
+    } catch {}
+  }
+
+  if (!res || !res.ok) {
+    return json(
+      { success: false, error: "Failed to fetch page" },
+      500
     );
-    if (r.ok) {
-      const t = (await r.text()).trim();
-      if (t.startsWith("http")) baseUrl = t;
-    }
-  } catch {}
-
-  const res = await fetch(baseUrl + path, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      Accept: "text/html",
-    },
-  });
-
-  if (!res.ok) {
-    return json({ success: false, error: "Failed to fetch page" }, 500);
   }
 
   const html = await res.text();
@@ -42,6 +55,48 @@ export default async function handler(req) {
   };
 
   return json(data);
+}
+
+/* ---------------- FETCH HELPERS ---------------- */
+
+async function getBaseUrl() {
+  try {
+    const r = await fetch(
+      "https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt",
+      { cf: { cacheTtl: 600 } }
+    );
+    if (r.ok) {
+      const t = (await r.text()).trim();
+      if (t.startsWith("http")) return t.replace(/\/$/, "");
+    }
+  } catch {}
+  return FALLBACK_BASE_URL;
+}
+
+async function getCfProxy() {
+  try {
+    const r = await fetch(
+      "https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt",
+      { cf: { cacheTtl: 600 } }
+    );
+    if (r.ok) {
+      const t = (await r.text()).trim();
+      if (t.startsWith("http")) return t.replace(/\/$/, "");
+    }
+  } catch {}
+  return null;
+}
+
+function browserHeaders() {
+  return {
+    headers: {
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+      Accept:
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+    },
+  };
 }
 
 /* ---------------- RESPONSE ---------------- */
@@ -90,7 +145,8 @@ function extractHomepageArticle(html) {
   }
 
   const sections = [];
-  const hRegex = /<h2[^>]*>([^<]+)<\/h2>\s*<p[^>]*>(.*?)<\/p>/gi;
+  const hRegex =
+    /<h2[^>]*>([^<]+)<\/h2>\s*<p[^>]*>(.*?)<\/p>/gi;
   let h;
 
   while ((h = hRegex.exec(article)) !== null) {
