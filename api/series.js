@@ -1,12 +1,11 @@
-// api/series.js
-const cheerio = require('cheerio');
+export const config = {
+  runtime: "edge"
+};
 
-// Cache for base URL and proxy URL (5 minutes)
 let baseUrlCache = { url: null, timestamp: 0 };
 let proxyUrlCache = { url: null, timestamp: 0 };
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
 
-// Fetch base URL from GitHub with caching
 async function getBaseUrl() {
   const now = Date.now();
   
@@ -30,13 +29,11 @@ async function getBaseUrl() {
     console.error('Error fetching base URL from GitHub:', error.message);
   }
   
-  // Fallback
   const fallbackUrl = 'https://toonstream.dad';
   baseUrlCache = { url: fallbackUrl, timestamp: now };
   return fallbackUrl;
 }
 
-// Fetch proxy URL from GitHub with caching
 async function getProxyUrl() {
   const now = Date.now();
   
@@ -64,7 +61,6 @@ async function getProxyUrl() {
   return null;
 }
 
-// Fetch with proxy fallback
 async function fetchWithProxy(targetUrl, refererUrl = null) {
   const proxyUrl = await getProxyUrl();
   const baseUrl = await getBaseUrl();
@@ -73,7 +69,6 @@ async function fetchWithProxy(targetUrl, refererUrl = null) {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
     'Cache-Control': 'max-age=0',
     'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
     'Sec-Ch-Ua-Mobile': '?0',
@@ -86,15 +81,19 @@ async function fetchWithProxy(targetUrl, refererUrl = null) {
     'Referer': refererUrl || baseUrl
   };
   
-  // Try proxy first
   if (proxyUrl) {
     try {
       const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      
       const proxyResponse = await fetch(proxyFetchUrl, {
         headers,
         redirect: 'follow',
-        signal: AbortSignal.timeout(30000)
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       if (proxyResponse.ok) {
         const html = await proxyResponse.text();
@@ -108,13 +107,17 @@ async function fetchWithProxy(targetUrl, refererUrl = null) {
     }
   }
   
-  // Fallback to direct fetch
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+    
     const directResponse = await fetch(targetUrl, {
       headers,
       redirect: 'follow',
-      signal: AbortSignal.timeout(30000)
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId);
     
     if (!directResponse.ok) {
       throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
@@ -128,14 +131,18 @@ async function fetchWithProxy(targetUrl, refererUrl = null) {
   }
 }
 
+function parseHTML(html) {
+  const parser = new DOMParser();
+  return parser.parseFromString(html, 'text/html');
+}
+
 function extractImageUrl(imgSrc) {
   if (!imgSrc) return null;
   return imgSrc.startsWith('//') ? 'https:' + imgSrc : imgSrc;
 }
 
-// Parse seasons query parameter
 function parseSeasons(seasonsParam) {
-  if (!seasonsParam) return [1]; // Default to season 1
+  if (!seasonsParam) return [1];
   
   if (seasonsParam.toLowerCase() === 'all') {
     return 'all';
@@ -151,7 +158,6 @@ function parseSeasons(seasonsParam) {
   for (const part of parts) {
     const trimmed = part.trim();
     
-    // Range: 2-4
     if (trimmed.includes('-')) {
       const [start, end] = trimmed.split('-').map(n => parseInt(n.trim()));
       if (!isNaN(start) && !isNaN(end)) {
@@ -159,9 +165,7 @@ function parseSeasons(seasonsParam) {
           if (!seasons.includes(i)) seasons.push(i);
         }
       }
-    }
-    // Single number: 3
-    else {
+    } else {
       const num = parseInt(trimmed);
       if (!isNaN(num) && !seasons.includes(num)) {
         seasons.push(num);
@@ -172,7 +176,6 @@ function parseSeasons(seasonsParam) {
   return seasons.sort((a, b) => a - b);
 }
 
-// Parse server query
 function parseServers(serverParam, totalServers) {
   if (!serverParam) return null;
   
@@ -204,37 +207,38 @@ function parseServers(serverParam, totalServers) {
   return servers.sort((a, b) => a - b);
 }
 
-// Scrape series metadata from main series page
 async function scrapeSeriesMetadata(baseUrl, seriesSlug) {
   const seriesUrl = `${baseUrl}/series/${seriesSlug}/`;
   
   try {
     const html = await fetchWithProxy(seriesUrl, baseUrl);
-    const $ = cheerio.load(html);
-    const $article = $('article.post.single');
+    const doc = parseHTML(html);
+    const article = doc.querySelector('article.post.single');
     
-    // Extract available seasons
     const availableSeasons = [];
-    $('.choose-season .sel-temp a').each((i, el) => {
-      const seasonNum = parseInt($(el).attr('data-season'));
+    const seasonLinks = doc.querySelectorAll('.choose-season .sel-temp a');
+    seasonLinks.forEach(el => {
+      const seasonNum = parseInt(el.getAttribute('data-season'));
       if (!isNaN(seasonNum)) {
         availableSeasons.push({
           seasonNumber: seasonNum,
-          name: $(el).text().trim()
+          name: el.textContent.trim()
         });
       }
     });
     
+    const descEl = article?.querySelector('.description');
+    
     return {
-      title: $article.find('.entry-title').text().trim(),
-      image: extractImageUrl($article.find('.post-thumbnail img').attr('src')),
-      duration: $article.find('.duration').text().replace('min.', '').trim(),
-      year: $article.find('.year').text().trim(),
-      views: $article.find('.views span').first().text().trim(),
-      totalSeasons: parseInt($article.find('.seasons span').text()) || 0,
-      totalEpisodes: parseInt($article.find('.episodes span').text()) || 0,
-      rating: $article.find('.vote .num').text().trim(),
-      description: $article.find('.description').html()?.trim() || '',
+      title: article?.querySelector('.entry-title')?.textContent.trim() || '',
+      image: extractImageUrl(article?.querySelector('.post-thumbnail img')?.getAttribute('src')),
+      duration: article?.querySelector('.duration')?.textContent.replace('min.', '').trim() || '',
+      year: article?.querySelector('.year')?.textContent.trim() || '',
+      views: article?.querySelector('.views span')?.textContent.trim() || '',
+      totalSeasons: parseInt(article?.querySelector('.seasons span')?.textContent) || 0,
+      totalEpisodes: parseInt(article?.querySelector('.episodes span')?.textContent) || 0,
+      rating: article?.querySelector('.vote .num')?.textContent.trim() || '',
+      description: descEl?.innerHTML?.trim() || '',
       availableSeasons: availableSeasons.sort((a, b) => a.seasonNumber - b.seasonNumber)
     };
   } catch (error) {
@@ -242,20 +246,18 @@ async function scrapeSeriesMetadata(baseUrl, seriesSlug) {
   }
 }
 
-// Scrape episode servers
 async function scrapeEpisodeServers(baseUrl, episodeSlug, serverQuery) {
   try {
     const episodeUrl = `${baseUrl}/episode/${episodeSlug}/`;
     const html = await fetchWithProxy(episodeUrl, baseUrl);
-    const $ = cheerio.load(html);
+    const doc = parseHTML(html);
     const servers = [];
     let serverIndex = 0;
     
-    // Extract from video player iframes
-    $('.video-player .video').each((i, el) => {
-      const $el = $(el);
-      const $iframe = $el.find('iframe');
-      const src = $iframe.attr('src') || $iframe.attr('data-src');
+    const videoEls = doc.querySelectorAll('.video-player .video');
+    videoEls.forEach(el => {
+      const iframe = el.querySelector('iframe');
+      const src = iframe?.getAttribute('src') || iframe?.getAttribute('data-src');
       
       if (src) {
         servers.push({
@@ -266,15 +268,15 @@ async function scrapeEpisodeServers(baseUrl, episodeSlug, serverQuery) {
       }
     });
     
-    // Extract server names from buttons
-    $('.aa-tbs-video li').each((i, el) => {
-      const $el = $(el);
-      const $btn = $el.find('.btn');
-      const serverNum = parseInt($btn.find('span').first().text()) - 1;
-      const serverName = $btn.find('.server').text()
+    const serverBtns = doc.querySelectorAll('.aa-tbs-video li');
+    serverBtns.forEach(el => {
+      const btn = el.querySelector('.btn');
+      const spanText = btn?.querySelector('span')?.textContent || '';
+      const serverNum = parseInt(spanText) - 1;
+      const serverName = btn?.querySelector('.server')?.textContent
         .replace('-Multi Audio', '')
         .replace('Multi Audio', '')
-        .trim();
+        .trim() || '';
       
       if (servers[serverNum]) {
         servers[serverNum].name = serverName;
@@ -282,7 +284,6 @@ async function scrapeEpisodeServers(baseUrl, episodeSlug, serverQuery) {
       }
     });
     
-    // Filter servers
     const requestedServers = parseServers(serverQuery, servers.length);
     if (requestedServers && requestedServers.length > 0) {
       return servers.filter(s => requestedServers.includes(s.serverNumber));
@@ -295,13 +296,12 @@ async function scrapeEpisodeServers(baseUrl, episodeSlug, serverQuery) {
   }
 }
 
-// Scrape episodes for a specific season
 async function scrapeSeasonEpisodes(baseUrl, seriesSlug, seasonNumber, includeSrc, serverQuery) {
   const episodeUrl = `${baseUrl}/episode/${seriesSlug}-${seasonNumber}x1/`;
   
   try {
     const html = await fetchWithProxy(episodeUrl, baseUrl);
-    const $ = cheerio.load(html);
+    const doc = parseHTML(html);
     
     const seasonData = {
       seasonNumber: seasonNumber,
@@ -309,53 +309,51 @@ async function scrapeSeasonEpisodes(baseUrl, seriesSlug, seasonNumber, includeSr
       categories: [],
       tags: [],
       cast: [],
-      year: $('article.post.single .year').text().trim(),
-      rating: $('article.post.single .vote .num').text().trim()
+      year: doc.querySelector('article.post.single .year')?.textContent.trim() || '',
+      rating: doc.querySelector('article.post.single .vote .num')?.textContent.trim() || ''
     };
     
-    // Extract categories
-    $('article.post.single .genres a').each((i, el) => {
+    const genreLinks = doc.querySelectorAll('article.post.single .genres a');
+    genreLinks.forEach(el => {
       seasonData.categories.push({
-        name: $(el).text().trim(),
-        url: $(el).attr('href')
+        name: el.textContent.trim(),
+        url: el.getAttribute('href')
       });
     });
     
-    // Extract tags
-    $('article.post.single .tag a').each((i, el) => {
+    const tagLinks = doc.querySelectorAll('article.post.single .tag a');
+    tagLinks.forEach(el => {
       seasonData.tags.push({
-        name: $(el).text().trim(),
-        url: $(el).attr('href')
+        name: el.textContent.trim(),
+        url: el.getAttribute('href')
       });
     });
     
-    // Extract cast
-    $('article.post.single .cast-lst a').each((i, el) => {
+    const castLinks = doc.querySelectorAll('article.post.single .cast-lst a');
+    castLinks.forEach(el => {
       seasonData.cast.push({
-        name: $(el).text().trim(),
-        url: $(el).attr('href')
+        name: el.textContent.trim(),
+        url: el.getAttribute('href')
       });
     });
     
-    // Extract all episodes from episode list
-    $('#episode_by_temp li').each((i, el) => {
-      const $el = $(el);
-      const $article = $el.find('article');
-      const episodeNum = $article.find('.num-epi').text().trim();
-      const url = $article.find('.lnk-blk').attr('href');
+    const episodeItems = doc.querySelectorAll('#episode_by_temp li');
+    episodeItems.forEach(el => {
+      const article = el.querySelector('article');
+      const episodeNum = article?.querySelector('.num-epi')?.textContent.trim() || '';
+      const url = article?.querySelector('.lnk-blk')?.getAttribute('href') || '';
       
       const episode = {
         episodeNumber: episodeNum,
-        title: $article.find('.entry-title').text().trim(),
-        image: extractImageUrl($article.find('img').attr('src')),
-        time: $article.find('.time').text().trim(),
+        title: article?.querySelector('.entry-title')?.textContent.trim() || '',
+        image: extractImageUrl(article?.querySelector('img')?.getAttribute('src')),
+        time: article?.querySelector('.time')?.textContent.trim() || '',
         url: url
       };
       
       seasonData.episodes.push(episode);
     });
     
-    // Fetch servers if requested
     if (includeSrc && seasonData.episodes.length > 0) {
       console.log(`Fetching servers for season ${seasonNumber}...`);
       for (const episode of seasonData.episodes) {
@@ -377,24 +375,19 @@ async function scrapeSeasonEpisodes(baseUrl, seriesSlug, seasonNumber, includeSr
   }
 }
 
-// Main scraper function
 async function scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, serverQuery) {
   try {
-    // Get series metadata
     const metadata = await scrapeSeriesMetadata(baseUrl, seriesSlug);
     
-    // Determine which seasons to fetch
     let requestedSeasons = parseSeasons(seasonsQuery);
     
     if (requestedSeasons === 'all') {
       requestedSeasons = metadata.availableSeasons.map(s => s.seasonNumber);
     } else if (requestedSeasons === 'latest') {
-      // Get the highest season number (latest season)
       const latestSeason = Math.max(...metadata.availableSeasons.map(s => s.seasonNumber));
       requestedSeasons = [latestSeason];
     }
     
-    // Validate requested seasons
     const validSeasons = requestedSeasons.filter(season => 
       metadata.availableSeasons.some(s => s.seasonNumber === season)
     );
@@ -406,7 +399,6 @@ async function scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, s
       };
     }
     
-    // Fetch episodes for each requested season
     const seasonsData = [];
     
     for (const seasonNum of validSeasons) {
@@ -415,7 +407,6 @@ async function scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, s
       seasonsData.push(seasonData);
     }
     
-    // Combine categories, tags, and cast from all seasons (deduplicate)
     const allCategories = new Map();
     const allTags = new Map();
     const allCast = new Map();
@@ -441,7 +432,6 @@ async function scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, s
       seasons: seasonsData
     };
     
-    // Calculate total episodes from fetched seasons
     const totalFetchedEpisodes = seasonsData.reduce((sum, s) => sum + s.episodes.length, 0);
     
     return {
@@ -465,54 +455,87 @@ async function scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, s
   }
 }
 
-// Vercel handler
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
+export default async function handler(req) {
+  const url = new URL(req.url);
   
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version'
+      }
+    });
   }
   
   if (req.method !== 'GET') {
-    return res.status(405).json({ success: false, error: 'Method not allowed. Use GET request.' });
+    return new Response(JSON.stringify({ success: false, error: 'Method not allowed. Use GET request.' }), {
+      status: 405,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
+    });
   }
   
   try {
     const baseUrl = await getBaseUrl();
     if (!baseUrl) {
-      return res.status(500).json({ success: false, error: 'Base URL not found.' });
-    }
-    
-    const seriesSlug = req.query.slug || req.query.series;
-    if (!seriesSlug) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Series slug required. Use ?slug=attack-on-titan&seasons=1,2 or ?slug=attack-on-titan&seasons=all or ?slug=attack-on-titan&seasons=latest&src=true&server=0,1,2' 
+      return new Response(JSON.stringify({ success: false, error: 'Base URL not found.' }), {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
       });
     }
     
-    const seasonsQuery = req.query.seasons || req.query.season;
-    const includeSrc = req.query.src === 'true';
-    const serverQuery = req.query.server || req.query.servers;
+    const seriesSlug = url.searchParams.get('slug') || url.searchParams.get('series');
+    if (!seriesSlug) {
+      return new Response(JSON.stringify({ 
+        success: false, 
+        error: 'Series slug required. Use ?slug=attack-on-titan&seasons=1,2 or ?slug=attack-on-titan&seasons=all or ?slug=attack-on-titan&seasons=latest&src=true&server=0,1,2' 
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+    
+    const seasonsQuery = url.searchParams.get('seasons') || url.searchParams.get('season');
+    const includeSrc = url.searchParams.get('src') === 'true';
+    const serverQuery = url.searchParams.get('server') || url.searchParams.get('servers');
     
     const result = await scrapeSeriesPage(baseUrl, seriesSlug, seasonsQuery, includeSrc, serverQuery);
     
-    if (!result.success && result.statusCode === 404) {
-      return res.status(404).json(result);
-    }
+    const status = !result.success && result.statusCode === 404 ? 404 : (result.success ? 200 : 500);
     
-    res.status(result.success ? 200 : 500).json(result);
+    return new Response(JSON.stringify(result), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version',
+        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600'
+      }
+    });
     
   } catch (error) {
     console.error('Handler error:', error);
-    res.status(500).json({ 
+    return new Response(JSON.stringify({ 
       success: false, 
       error: 'Internal server error', 
       message: error.message 
+    }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
     });
   }
-};
+}
