@@ -21,14 +21,14 @@ export default async function handler(req) {
 
   let res;
 
-  // ---- 1️⃣ CF proxy FIRST (HTML as TEXT)
+  // 1️⃣ Cloudflare proxy first
   if (proxyTarget) {
     try {
       res = await fetch(proxyTarget, browserHeaders());
     } catch {}
   }
 
-  // ---- 2️⃣ Fallback to origin
+  // 2️⃣ Fallback origin
   if (!res || !res.ok) {
     try {
       res = await fetch(baseUrl + targetPath, browserHeaders());
@@ -36,20 +36,19 @@ export default async function handler(req) {
   }
 
   if (!res || !res.ok) {
-    return json(
-      { success: false, error: "Failed to fetch page" },
-      500
-    );
+    return json({ success: false, error: "Failed to fetch page" }, 500);
   }
 
-  // Cloudflare returns text/plain → this is correct
   const html = await res.text();
+
+  // 🔥 FAST PARSE ONCE
+  const doc = tokenizeHTML(html);
 
   const data = {
     success: true,
-    site: extractMeta(html),
-    homepage: extractHomepageArticle(html),
-    suggestions: extractSuggestions(html),
+    site: extractMeta(doc),
+    homepage: extractHomepageArticle(doc),
+    suggestions: extractSuggestions(doc),
   };
 
   return json(data);
@@ -90,7 +89,6 @@ function browserHeaders() {
     headers: {
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-      // IMPORTANT: allow text/plain from Cloudflare
       Accept: "text/plain,text/html,*/*",
       "Accept-Language": "en-US,en;q=0.9",
     },
@@ -110,65 +108,79 @@ function json(data, status = 200) {
   });
 }
 
+/* ---------------- HTML TOKENIZER ---------------- */
+/* One-pass, Edge-safe, no DOM */
+
+function tokenizeHTML(html) {
+  return {
+    html,
+    textBetween(start, end) {
+      const s = html.indexOf(start);
+      if (s === -1) return null;
+      const e = html.indexOf(end, s + start.length);
+      if (e === -1) return null;
+      return html.slice(s + start.length, e);
+    },
+    all(regex) {
+      const out = [];
+      let m;
+      while ((m = regex.exec(html)) !== null) out.push(m);
+      return out;
+    },
+  };
+}
+
 /* ---------------- META ---------------- */
 
-function extractMeta(html) {
+function extractMeta(doc) {
   return {
-    title: match(html, /<title>([^<]+)<\/title>/i),
-    description: match(
-      html,
-      /<meta name="description" content="([^"]+)"/i
+    title: clean(
+      doc.textBetween("<title>", "</title>")
+    ),
+    description: clean(
+      match(doc.html, /<meta name="description" content="([^"]+)"/i)
     ),
   };
 }
 
 /* ---------------- HOMEPAGE ARTICLE ---------------- */
 
-function extractHomepageArticle(html) {
-  const articleMatch = html.match(
-    /<div id="home-article">([\s\S]*?)<\/div>\s*<\/div>/i
+function extractHomepageArticle(doc) {
+  const articleHTML = doc.textBetween(
+    '<div id="home-article">',
+    "</div></div>"
   );
 
-  if (!articleMatch) return null;
+  if (!articleHTML) return null;
 
-  const article = articleMatch[1];
+  const intro = [];
+  const sections = [];
 
-  const paragraphs = [];
-  const pRegex = /<p[^>]*>(.*?)<\/p>/gi;
-  let p;
-
-  while ((p = pRegex.exec(article)) !== null) {
+  for (const p of articleHTML.matchAll(/<p[^>]*>(.*?)<\/p>/gi)) {
     const text = clean(p[1]);
-    if (text) paragraphs.push(text);
+    if (text && intro.length < 3) intro.push(text);
   }
 
-  const sections = [];
-  const hRegex =
-    /<h2[^>]*>([^<]+)<\/h2>\s*<p[^>]*>(.*?)<\/p>/gi;
-  let h;
-
-  while ((h = hRegex.exec(article)) !== null) {
+  for (const h of articleHTML.matchAll(
+    /<h2[^>]*>([^<]+)<\/h2>\s*<p[^>]*>(.*?)<\/p>/gi
+  )) {
     sections.push({
       heading: clean(h[1]),
       content: clean(h[2]),
     });
   }
 
-  return {
-    intro: paragraphs.slice(0, 3),
-    sections,
-  };
+  return { intro, sections };
 }
 
 /* ---------------- SEARCH SUGGESTIONS ---------------- */
 
-function extractSuggestions(html) {
+function extractSuggestions(doc) {
   const results = [];
-  const regex =
-    /<a class="item" href="([^"]+)">([^<]+)<\/a>/gi;
 
-  let m;
-  while ((m = regex.exec(html)) !== null) {
+  for (const m of doc.all(
+    /<a class="item" href="([^"]+)">([^<]+)<\/a>/gi
+  )) {
     results.push({
       title: clean(m[2]),
       url: m[1],
@@ -182,7 +194,7 @@ function extractSuggestions(html) {
 
 function match(html, regex) {
   const m = html.match(regex);
-  return m ? clean(m[1]) : null;
+  return m ? m[1] : null;
 }
 
 function clean(str) {
