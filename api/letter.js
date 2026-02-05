@@ -64,66 +64,35 @@ async function getProxyUrl() {
   return null;
 }
 
-// Fetch with proxy fallback
-async function fetchWithProxy(targetUrl) {
+// Fetch using Cloudflare proxy (returns HTML as text)
+async function fetchViaProxy(path) {
   const proxyUrl = await getProxyUrl();
   
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'max-age=0',
-    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1'
-  };
-  
-  // Try proxy first
-  if (proxyUrl) {
-    try {
-      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
-      const proxyResponse = await fetch(proxyFetchUrl, {
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(30000)
-      });
-      
-      if (proxyResponse.ok) {
-        console.log('✓ Proxy fetch successful');
-        return await proxyResponse.text();
-      } else {
-        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
-      }
-    } catch (proxyError) {
-      console.log('✗ Proxy fetch failed:', proxyError.message);
-    }
+  if (!proxyUrl) {
+    throw new Error('Cloudflare proxy URL not available');
   }
   
-  // Fallback to direct fetch
   try {
-    const baseUrl = await getBaseUrl();
-    headers['Referer'] = baseUrl;
+    const url = `${proxyUrl}?path=${encodeURIComponent(path)}`;
+    console.log(`Fetching via proxy: ${url}`);
     
-    const directResponse = await fetch(targetUrl, {
-      headers,
-      redirect: 'follow',
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/plain,text/html,*/*'
+      },
       signal: AbortSignal.timeout(30000)
     });
     
-    if (!directResponse.ok) {
-      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
+    if (!response.ok) {
+      throw new Error(`Proxy returned ${response.status}: ${response.statusText}`);
     }
     
-    console.log('✓ Direct fetch successful');
-    return await directResponse.text();
-  } catch (directError) {
-    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
+    const html = await response.text();
+    console.log(`✓ Proxy fetch successful for path: ${path}`);
+    return html;
+  } catch (error) {
+    throw new Error(`Proxy fetch failed: ${error.message}`);
   }
 }
 
@@ -381,19 +350,20 @@ function scrapeSchedule($) {
   return schedule;
 }
 
-// Main scraper function
+// Main scraper function using Cloudflare proxy
 async function scrapeLetterPage(baseUrl, letter, pageNumber = 1) {
   try {
-    let letterUrl;
+    // Construct the path for the proxy
+    let path;
     if (pageNumber === 1) {
-      letterUrl = `${baseUrl}/home/letter/${letter}/`;
+      path = `letter/${letter}/`;
     } else {
-      letterUrl = `${baseUrl}/home/letter/${letter}/page/${pageNumber}/`;
+      path = `letter/${letter}/page/${pageNumber}/`;
     }
     
-    console.log(`Scraping: ${letterUrl}`);
+    console.log(`Scraping letter: ${letter}, page: ${pageNumber}`);
     
-    const html = await fetchWithProxy(letterUrl);
+    const html = await fetchViaProxy(path);
     const $ = cheerio.load(html);
     
     // Get page title
@@ -401,7 +371,7 @@ async function scrapeLetterPage(baseUrl, letter, pageNumber = 1) {
     
     const data = {
       baseUrl: baseUrl,
-      pageUrl: letterUrl,
+      pageUrl: `${baseUrl}/letter/${letter}/${pageNumber > 1 ? `page/${pageNumber}/` : ''}`,
       pageType: 'letter',
       letter: letter.toUpperCase(),
       pageNumber: pageNumber,
