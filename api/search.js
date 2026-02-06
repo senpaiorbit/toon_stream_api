@@ -87,7 +87,7 @@ async function fetchWithProxy(targetUrl) {
   // Try proxy first
   if (proxyUrl) {
     try {
-      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+      const proxyFetchUrl = `\( {proxyUrl}?url= \){encodeURIComponent(targetUrl)}`;
       const proxyResponse = await fetch(proxyFetchUrl, {
         headers,
         redirect: 'follow',
@@ -302,7 +302,7 @@ function scrapeSchedule($) {
   days.forEach(day => {
     const daySchedule = [];
     
-    $(`#${day} .custom-schedule-item`).each((index, element) => {
+    \( (`# \){day} .custom-schedule-item`).each((index, element) => {
       const $elem = $(element);
       const $time = $elem.find('.schedule-time');
       const $description = $elem.find('.schedule-description');
@@ -319,11 +319,57 @@ function scrapeSchedule($) {
   return schedule;
 }
 
-// Main scraper function
-async function scrapeSearchPage(baseUrl, query) {
+// Scrape anime details
+function scrapeAnimeDetails($, internalType) {
+  const data = {};
+  
+  data.title = $('h1.entry-title').text().trim();
+  data.image = extractImageUrl($('.post-thumbnail img').attr('src') || $('.wp-post-image').attr('src'));
+  data.rating = $('.vote').text().replace('TMDB', '').trim() || null;
+  
+  const classList = $('article.post').attr('class') || '';
+  data.metadata = extractMetadata(classList);
+  
+  // Description
+  data.description = $('.entry-content > p').first().text().trim() || $('.wp-content p').text().trim();
+  
+  // Genres
+  data.genres = [];
+  $('.genres a, .category a').each((i, el) => {
+    data.genres.push($(el).text().trim());
+  });
+  
+  // Cast
+  data.cast = [];
+  $('.cast a, [class*="cast"] a').each((i, el) => {
+    data.cast.push($(el).text().trim());
+  });
+  
+  // Episodes if series (tv)
+  if (internalType === 'series') {
+    data.episodes = [];
+    $('.episodes li, .episode-list li').each((i, el) => {
+      const $el = $(el);
+      data.episodes.push({
+        number: $el.find('.episode-number, .num').text().trim(),
+        title: $el.find('.episode-title, .title').text().trim(),
+        url: $el.find('a').attr('href'),
+        date: $el.find('.episode-date, .date').text().trim()
+      });
+    });
+  }
+  
+  return data;
+}
+
+// Main scraper function for search
+async function scrapeSearchPage(baseUrl, query, page = 1) {
   try {
-    // Construct search URL
-    const searchUrl = `${baseUrl}/home/?s=${encodeURIComponent(query)}`;
+    // Construct search URL with pagination
+    let searchUrl = `\( {baseUrl}/home/?s= \){encodeURIComponent(query)}`;
+    if (page > 1) {
+      searchUrl = `\( {baseUrl}/home/page/ \){page}/?s=${encodeURIComponent(query)}`;
+    }
     
     console.log(`Scraping: ${searchUrl}`);
     
@@ -336,6 +382,19 @@ async function scrapeSearchPage(baseUrl, query) {
     // Check if there are any results
     const hasResults = $('.section.movies .post-lst li').length > 0;
     
+    // Extract pagination info
+    let totalPages = 1;
+    const pageLinks = $('.pagination .nav-links a.page-link');
+    pageLinks.each((i, el) => {
+      const href = $(el).attr('href');
+      if (href) {
+        const match = href.match(/\/page\/(\d+)\/?/);
+        if (match) {
+          totalPages = Math.max(totalPages, parseInt(match[1]));
+        }
+      }
+    });
+    
     const data = {
       baseUrl: baseUrl,
       searchUrl: searchUrl,
@@ -347,7 +406,13 @@ async function scrapeSearchPage(baseUrl, query) {
       results: scrapeSearchResults($),
       randomSeries: scrapeRandomSeries($),
       randomMovies: scrapeRandomMovies($),
-      schedule: scrapeSchedule($)
+      schedule: scrapeSchedule($),
+      pagination: {
+        current: page,
+        total: totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      }
     };
     
     return {
@@ -370,6 +435,51 @@ async function scrapeSearchPage(baseUrl, query) {
       return {
         success: false,
         error: 'Search page not found',
+        statusCode: 404
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// Main scraper function for anime details
+async function scrapeAnimePage(baseUrl, slug, type) {
+  try {
+    const internalType = type === 'tv' ? 'series' : 'movies';
+    const animeUrl = `\( {baseUrl}/ \){internalType}/${slug}/`;
+    
+    console.log(`Scraping: ${animeUrl}`);
+    
+    const html = await fetchWithProxy(animeUrl);
+    const $ = cheerio.load(html);
+    
+    const details = scrapeAnimeDetails($, internalType);
+    
+    const data = {
+      baseUrl: baseUrl,
+      animeUrl: animeUrl,
+      slug: slug,
+      type: type,
+      scrapedAt: new Date().toISOString(),
+      ...details
+    };
+    
+    return {
+      success: true,
+      data: data
+    };
+    
+  } catch (error) {
+    console.error('Anime scraping error:', error.message);
+    
+    if (error.message.includes('404')) {
+      return {
+        success: false,
+        error: 'Anime page not found',
         statusCode: 404
       };
     }
@@ -411,31 +521,51 @@ module.exports = async (req, res) => {
       });
     }
     
-    // Get search query from query parameter
+    // Get parameters
     const query = req.query.q || req.query.s || req.query.query;
+    const page = parseInt(req.query.page) || 1;
+    const slug = req.query.slug;
+    const type = req.query.type;
     
-    if (!query) {
+    if (slug && type) {
+      if (!['tv', 'movie'].includes(type)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid type. Must be "tv" or "movie".'
+        });
+      }
+      
+      const result = await scrapeAnimePage(baseUrl, slug, type);
+      
+      if (!result.success && result.statusCode === 404) {
+        return res.status(404).json(result);
+      }
+      
+      return res.status(result.success ? 200 : 500).json(result);
+      
+    } else if (query) {
+      // Validate query length
+      if (query.length < 2) {
+        return res.status(400).json({
+          success: false,
+          error: 'Search query must be at least 2 characters long'
+        });
+      }
+      
+      const result = await scrapeSearchPage(baseUrl, query, page);
+      
+      if (!result.success && result.statusCode === 404) {
+        return res.status(404).json(result);
+      }
+      
+      return res.status(result.success ? 200 : 500).json(result);
+      
+    } else {
       return res.status(400).json({
         success: false,
-        error: 'Search query is required. Use ?q=naruto or ?s=naruto'
+        error: 'Search query is required using ?q= or provide ?slug= and ?type=tv/movie for anime details.'
       });
     }
-    
-    // Validate query length
-    if (query.length < 2) {
-      return res.status(400).json({
-        success: false,
-        error: 'Search query must be at least 2 characters long'
-      });
-    }
-    
-    const result = await scrapeSearchPage(baseUrl, query);
-    
-    if (!result.success && result.statusCode === 404) {
-      return res.status(404).json(result);
-    }
-    
-    res.status(result.success ? 200 : 500).json(result);
     
   } catch (error) {
     console.error('Handler error:', error);
