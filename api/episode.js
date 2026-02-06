@@ -330,6 +330,29 @@ function scrapeNavigation($) {
   return nav;
 }
 
+// NEW FUNCTION: Extract seasons
+function scrapeSeasons($) {
+  const seasons = [];
+  
+  $('.choose-season .aa-cnt.sub-menu li.sel-temp').each((i, el) => {
+    const $el = $(el);
+    const $link = $el.find('a');
+    
+    const seasonText = $link.text().trim(); // e.g., "Season 1"
+    const dataPost = $link.attr('data-post');
+    const dataSeason = $link.attr('data-season');
+    
+    seasons.push({
+      name: seasonText,
+      seasonNumber: parseInt(dataSeason) || 0,
+      dataPost: dataPost || null,
+      dataSeason: dataSeason || null
+    });
+  });
+  
+  return seasons;
+}
+
 // Extract servers/iframes
 async function scrapeServers($) {
   const servers = [];
@@ -418,6 +441,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
     const metadata = scrapeEpisodeMetadata($);
     const allServers = await scrapeServers($);
     const filteredServers = filterServers(allServers, serverQuery);
+    const seasons = scrapeSeasons($); // NEW: Extract seasons
     
     const data = {
       baseUrl,
@@ -429,6 +453,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
       categories: scrapeCategories($),
       cast: scrapeCast($),
       navigation: scrapeNavigation($),
+      seasons: seasons, // NEW: Include seasons in response
       servers: filteredServers
     };
     
@@ -439,7 +464,8 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
         totalServersAvailable: allServers.length,
         serversReturned: filteredServers.length,
         castCount: data.cast.length,
-        categoriesCount: data.categories.length
+        categoriesCount: data.categories.length,
+        seasonsCount: seasons.length // NEW: Season count
       }
     };
     
