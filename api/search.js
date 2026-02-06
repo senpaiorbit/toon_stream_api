@@ -64,8 +64,8 @@ async function getProxyUrl() {
   return null;
 }
 
-// Fetch with proxy fallback
-async function fetchWithProxy(targetUrl) {
+// Fetch with proxy fallback - optimized for HTML text response
+async function fetchWithProxy(targetPath) {
   const proxyUrl = await getProxyUrl();
   
   const headers = {
@@ -84,10 +84,12 @@ async function fetchWithProxy(targetUrl) {
     'Upgrade-Insecure-Requests': '1'
   };
   
-  // Try proxy first
+  // Try proxy first (proxy returns HTML as text)
   if (proxyUrl) {
     try {
-      const proxyFetchUrl = `\( {proxyUrl}?url= \){encodeURIComponent(targetUrl)}`;
+      const proxyFetchUrl = `${proxyUrl}?path=${encodeURIComponent(targetPath)}`;
+      console.log('Fetching via proxy:', proxyFetchUrl);
+      
       const proxyResponse = await fetch(proxyFetchUrl, {
         headers,
         redirect: 'follow',
@@ -95,8 +97,9 @@ async function fetchWithProxy(targetUrl) {
       });
       
       if (proxyResponse.ok) {
-        console.log('✓ Proxy fetch successful');
-        return await proxyResponse.text();
+        const htmlText = await proxyResponse.text();
+        console.log('✓ Proxy fetch successful, HTML length:', htmlText.length);
+        return htmlText;
       } else {
         console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
       }
@@ -108,9 +111,12 @@ async function fetchWithProxy(targetUrl) {
   // Fallback to direct fetch
   try {
     const baseUrl = await getBaseUrl();
+    const fullUrl = `${baseUrl}${targetPath}`;
     headers['Referer'] = baseUrl;
     
-    const directResponse = await fetch(targetUrl, {
+    console.log('Fetching directly:', fullUrl);
+    
+    const directResponse = await fetch(fullUrl, {
       headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(30000)
@@ -120,8 +126,9 @@ async function fetchWithProxy(targetUrl) {
       throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
     }
     
-    console.log('✓ Direct fetch successful');
-    return await directResponse.text();
+    const htmlText = await directResponse.text();
+    console.log('✓ Direct fetch successful, HTML length:', htmlText.length);
+    return htmlText;
   } catch (directError) {
     throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
   }
@@ -221,19 +228,75 @@ function scrapeSearchResults($) {
     const classList = $elem.attr('class');
     
     const metadata = extractMetadata(classList);
+    const url = $link.attr('href') || '';
+    
+    // Extract slug from URL
+    let slug = '';
+    if (url) {
+      const urlParts = url.split('/').filter(Boolean);
+      slug = urlParts[urlParts.length - 1] || '';
+    }
     
     results.push({
       id: postId || '',
+      slug: slug,
       title: $title.text().trim(),
       image: extractImageUrl($img.attr('src')),
       imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
+      url: url,
       rating: $vote.text().replace('TMDB', '').trim() || null,
       ...metadata
     });
   });
   
   return results;
+}
+
+// Scrape pagination info
+function scrapePagination($) {
+  const pagination = {
+    currentPage: 1,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+    nextPage: null,
+    prevPage: null,
+    pages: []
+  };
+  
+  const $currentPage = $('.navigation.pagination .current');
+  if ($currentPage.length) {
+    pagination.currentPage = parseInt($currentPage.text()) || 1;
+  }
+  
+  $('.navigation.pagination .page-link').each((index, element) => {
+    const $elem = $(element);
+    const pageNum = parseInt($elem.text());
+    if (!isNaN(pageNum)) {
+      pagination.pages.push({
+        number: pageNum,
+        url: $elem.attr('href'),
+        isCurrent: $elem.hasClass('current')
+      });
+      if (pageNum > pagination.totalPages) {
+        pagination.totalPages = pageNum;
+      }
+    }
+  });
+  
+  const $nextLink = $('.navigation.pagination a:contains("NEXT")');
+  if ($nextLink.length && $nextLink.attr('href') !== 'javascript:void(0)') {
+    pagination.hasNext = true;
+    pagination.nextPage = pagination.currentPage + 1;
+  }
+  
+  const $prevLink = $('.navigation.pagination a:contains("PREV")');
+  if ($prevLink.length && $prevLink.attr('href') !== 'javascript:void(0)') {
+    pagination.hasPrev = true;
+    pagination.prevPage = pagination.currentPage - 1;
+  }
+  
+  return pagination;
 }
 
 // Scrape random series sidebar
@@ -250,13 +313,21 @@ function scrapeRandomSeries($) {
     const classList = $elem.attr('class');
     
     const metadata = extractMetadata(classList);
+    const url = $link.attr('href') || '';
+    
+    let slug = '';
+    if (url) {
+      const urlParts = url.split('/').filter(Boolean);
+      slug = urlParts[urlParts.length - 1] || '';
+    }
     
     randomSeries.push({
       id: postId || '',
+      slug: slug,
       title: $title.text().trim(),
       image: extractImageUrl($img.attr('src')),
       imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
+      url: url,
       rating: $vote.text().replace('TMDB', '').trim() || null,
       ...metadata
     });
@@ -279,13 +350,21 @@ function scrapeRandomMovies($) {
     const classList = $elem.attr('class');
     
     const metadata = extractMetadata(classList);
+    const url = $link.attr('href') || '';
+    
+    let slug = '';
+    if (url) {
+      const urlParts = url.split('/').filter(Boolean);
+      slug = urlParts[urlParts.length - 1] || '';
+    }
     
     randomMovies.push({
       id: postId || '',
+      slug: slug,
       title: $title.text().trim(),
       image: extractImageUrl($img.attr('src')),
       imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
+      url: url,
       rating: $vote.text().replace('TMDB', '').trim() || null,
       ...metadata
     });
@@ -302,7 +381,7 @@ function scrapeSchedule($) {
   days.forEach(day => {
     const daySchedule = [];
     
-    \( (`# \){day} .custom-schedule-item`).each((index, element) => {
+    $(`#${day} .custom-schedule-item`).each((index, element) => {
       const $elem = $(element);
       const $time = $elem.find('.schedule-time');
       const $description = $elem.find('.schedule-description');
@@ -319,61 +398,151 @@ function scrapeSchedule($) {
   return schedule;
 }
 
-// Scrape anime details
-function scrapeAnimeDetails($, internalType) {
-  const data = {};
-  
-  data.title = $('h1.entry-title').text().trim();
-  data.image = extractImageUrl($('.post-thumbnail img').attr('src') || $('.wp-post-image').attr('src'));
-  data.rating = $('.vote').text().replace('TMDB', '').trim() || null;
-  
-  const classList = $('article.post').attr('class') || '';
-  data.metadata = extractMetadata(classList);
-  
-  // Description
-  data.description = $('.entry-content > p').first().text().trim() || $('.wp-content p').text().trim();
-  
-  // Genres
-  data.genres = [];
-  $('.genres a, .category a').each((i, el) => {
-    data.genres.push($(el).text().trim());
+// Scrape anime detail page
+function scrapeAnimeDetail($, baseUrl) {
+  const detail = {
+    title: '',
+    alternativeTitles: [],
+    description: '',
+    image: null,
+    coverImage: null,
+    rating: null,
+    genres: [],
+    tags: [],
+    cast: [],
+    directors: [],
+    year: null,
+    status: null,
+    type: null,
+    episodes: [],
+    seasons: [],
+    relatedContent: [],
+    downloadLinks: []
+  };
+
+  // Extract title
+  detail.title = $('.entry-title').first().text().trim();
+
+  // Extract description
+  detail.description = $('.entry-content p').first().text().trim();
+
+  // Extract main image
+  const $mainImg = $('.post-thumbnail img').first();
+  detail.image = extractImageUrl($mainImg.attr('src'));
+
+  // Extract cover/background image
+  const $coverImg = $('.bghd img, .bgft img').first();
+  if ($coverImg.length) {
+    detail.coverImage = extractImageUrl($coverImg.attr('src'));
+  }
+
+  // Extract rating
+  const ratingText = $('.vote').first().text();
+  if (ratingText) {
+    detail.rating = ratingText.replace('TMDB', '').trim();
+  }
+
+  // Extract metadata from body class
+  const bodyClass = $('body').attr('class') || '';
+  const metadata = extractMetadata(bodyClass);
+  detail.genres = metadata.categories;
+  detail.tags = metadata.tags;
+  detail.cast = metadata.cast;
+  detail.directors = metadata.directors;
+  detail.year = metadata.year;
+  detail.type = metadata.contentType;
+
+  // Extract episodes/seasons (for series)
+  $('.aa-season, .season-list').each((index, element) => {
+    const $season = $(element);
+    const seasonTitle = $season.find('.season-title').text().trim();
+    const episodes = [];
+
+    $season.find('.episode-item, .aa-ep').each((epIndex, epElement) => {
+      const $ep = $(epElement);
+      const epTitle = $ep.find('.episode-title, .ep-title').text().trim();
+      const epNumber = $ep.find('.episode-number, .ep-num').text().trim();
+      const epUrl = $ep.find('a').attr('href');
+
+      episodes.push({
+        number: epNumber,
+        title: epTitle,
+        url: epUrl || ''
+      });
+    });
+
+    if (episodes.length > 0) {
+      detail.seasons.push({
+        title: seasonTitle || `Season ${index + 1}`,
+        episodes: episodes
+      });
+    }
   });
-  
-  // Cast
-  data.cast = [];
-  $('.cast a, [class*="cast"] a').each((i, el) => {
-    data.cast.push($(el).text().trim());
-  });
-  
-  // Episodes if series (tv)
-  if (internalType === 'series') {
-    data.episodes = [];
-    $('.episodes li, .episode-list li').each((i, el) => {
-      const $el = $(el);
-      data.episodes.push({
-        number: $el.find('.episode-number, .num').text().trim(),
-        title: $el.find('.episode-title, .title').text().trim(),
-        url: $el.find('a').attr('href'),
-        date: $el.find('.episode-date, .date').text().trim()
+
+  // Extract single episodes list (if no seasons)
+  if (detail.seasons.length === 0) {
+    $('.episode-list .episode-item, .aa-eps .aa-ep').each((index, element) => {
+      const $ep = $(element);
+      const epTitle = $ep.find('.episode-title, .ep-title').text().trim();
+      const epNumber = $ep.text().match(/\d+/)?.[0] || (index + 1).toString();
+      const epUrl = $ep.find('a').attr('href') || $ep.attr('href');
+
+      detail.episodes.push({
+        number: epNumber,
+        title: epTitle,
+        url: epUrl || ''
       });
     });
   }
-  
-  return data;
+
+  // Extract download links
+  $('.download-links a, .dl-link').each((index, element) => {
+    const $link = $(element);
+    detail.downloadLinks.push({
+      quality: $link.text().trim(),
+      url: $link.attr('href') || ''
+    });
+  });
+
+  // Extract related content
+  $('.related-posts .post-lst li, .aa-rel .post').each((index, element) => {
+    const $elem = $(element);
+    const $link = $elem.find('.lnk-blk, a').first();
+    const $img = $elem.find('img');
+    const $title = $elem.find('.entry-title, .title');
+    const url = $link.attr('href') || '';
+    
+    let slug = '';
+    if (url) {
+      const urlParts = url.split('/').filter(Boolean);
+      slug = urlParts[urlParts.length - 1] || '';
+    }
+
+    detail.relatedContent.push({
+      slug: slug,
+      title: $title.text().trim(),
+      image: extractImageUrl($img.attr('src')),
+      url: url
+    });
+  });
+
+  return detail;
 }
 
-// Main scraper function for search
-async function scrapeSearchPage(baseUrl, query, page = 1) {
+// Main scraper function for search with pagination
+async function scrapeSearchPage(query, page = 1) {
   try {
-    // Construct search URL with pagination
-    let searchUrl = `\( {baseUrl}/home/?s= \){encodeURIComponent(query)}`;
-    if (page > 1) {
-      searchUrl = `\( {baseUrl}/home/page/ \){page}/?s=${encodeURIComponent(query)}`;
+    // Construct search path
+    let searchPath;
+    if (page === 1) {
+      searchPath = `/home/?s=${encodeURIComponent(query)}`;
+    } else {
+      searchPath = `/home/page/${page}/?s=${encodeURIComponent(query)}`;
     }
     
-    console.log(`Scraping: ${searchUrl}`);
+    console.log(`Scraping search: ${searchPath}`);
     
-    const html = await fetchWithProxy(searchUrl);
+    const html = await fetchWithProxy(searchPath);
     const $ = cheerio.load(html);
     
     // Get search query from page title
@@ -382,37 +551,17 @@ async function scrapeSearchPage(baseUrl, query, page = 1) {
     // Check if there are any results
     const hasResults = $('.section.movies .post-lst li').length > 0;
     
-    // Extract pagination info
-    let totalPages = 1;
-    const pageLinks = $('.pagination .nav-links a.page-link');
-    pageLinks.each((i, el) => {
-      const href = $(el).attr('href');
-      if (href) {
-        const match = href.match(/\/page\/(\d+)\/?/);
-        if (match) {
-          totalPages = Math.max(totalPages, parseInt(match[1]));
-        }
-      }
-    });
-    
     const data = {
-      baseUrl: baseUrl,
-      searchUrl: searchUrl,
       pageType: 'search',
       searchQuery: query,
       searchTitle: pageTitle || query,
       hasResults: hasResults,
+      pagination: scrapePagination($),
       scrapedAt: new Date().toISOString(),
       results: scrapeSearchResults($),
       randomSeries: scrapeRandomSeries($),
       randomMovies: scrapeRandomMovies($),
-      schedule: scrapeSchedule($),
-      pagination: {
-        current: page,
-        total: totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1
-      }
+      schedule: scrapeSchedule($)
     };
     
     return {
@@ -424,7 +573,9 @@ async function scrapeSearchPage(baseUrl, query, page = 1) {
         moviesCount: data.results.filter(r => r.contentType === 'movie').length,
         postsCount: data.results.filter(r => r.contentType === 'post').length,
         randomSeriesCount: data.randomSeries.length,
-        randomMoviesCount: data.randomMovies.length
+        randomMoviesCount: data.randomMovies.length,
+        currentPage: data.pagination.currentPage,
+        totalPages: data.pagination.totalPages
       }
     };
     
@@ -446,26 +597,32 @@ async function scrapeSearchPage(baseUrl, query, page = 1) {
   }
 }
 
-// Main scraper function for anime details
-async function scrapeAnimePage(baseUrl, slug, type) {
+// Scrape anime detail page
+async function scrapeAnimePage(slug, type) {
   try {
-    const internalType = type === 'tv' ? 'series' : 'movies';
-    const animeUrl = `\( {baseUrl}/ \){internalType}/${slug}/`;
+    const baseUrl = await getBaseUrl();
     
-    console.log(`Scraping: ${animeUrl}`);
+    // Construct anime path based on type
+    let animePath;
+    if (type === 'movie' || type === 'movies') {
+      animePath = `/movies/${slug}/`;
+    } else {
+      animePath = `/series/${slug}/`;
+    }
     
-    const html = await fetchWithProxy(animeUrl);
+    console.log(`Scraping anime detail: ${animePath}`);
+    
+    const html = await fetchWithProxy(animePath);
     const $ = cheerio.load(html);
     
-    const details = scrapeAnimeDetails($, internalType);
-    
     const data = {
-      baseUrl: baseUrl,
-      animeUrl: animeUrl,
+      pageType: 'detail',
       slug: slug,
       type: type,
       scrapedAt: new Date().toISOString(),
-      ...details
+      detail: scrapeAnimeDetail($, baseUrl),
+      randomSeries: scrapeRandomSeries($),
+      randomMovies: scrapeRandomMovies($)
     };
     
     return {
@@ -474,7 +631,7 @@ async function scrapeAnimePage(baseUrl, slug, type) {
     };
     
   } catch (error) {
-    console.error('Anime scraping error:', error.message);
+    console.error('Scraping error:', error.message);
     
     if (error.message.includes('404')) {
       return {
@@ -512,60 +669,67 @@ module.exports = async (req, res) => {
   }
   
   try {
-    const baseUrl = await getBaseUrl();
-    
-    if (!baseUrl) {
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Base URL not found.' 
-      });
-    }
-    
-    // Get parameters
-    const query = req.query.q || req.query.s || req.query.query;
-    const page = parseInt(req.query.page) || 1;
+    // Check if this is a detail page request
     const slug = req.query.slug;
     const type = req.query.type;
     
-    if (slug && type) {
-      if (!['tv', 'movie'].includes(type)) {
+    if (slug) {
+      // Detail page request
+      if (!type || !['tv', 'movie', 'series', 'movies'].includes(type.toLowerCase())) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid type. Must be "tv" or "movie".'
+          error: 'Type parameter is required and must be either "tv" or "movie"'
         });
       }
       
-      const result = await scrapeAnimePage(baseUrl, slug, type);
+      const result = await scrapeAnimePage(slug, type.toLowerCase());
       
       if (!result.success && result.statusCode === 404) {
         return res.status(404).json(result);
       }
       
       return res.status(result.success ? 200 : 500).json(result);
-      
-    } else if (query) {
-      // Validate query length
-      if (query.length < 2) {
-        return res.status(400).json({
-          success: false,
-          error: 'Search query must be at least 2 characters long'
-        });
-      }
-      
-      const result = await scrapeSearchPage(baseUrl, query, page);
-      
-      if (!result.success && result.statusCode === 404) {
-        return res.status(404).json(result);
-      }
-      
-      return res.status(result.success ? 200 : 500).json(result);
-      
-    } else {
+    }
+    
+    // Search page request
+    const query = req.query.q || req.query.s || req.query.query;
+    
+    if (!query) {
       return res.status(400).json({
         success: false,
-        error: 'Search query is required using ?q= or provide ?slug= and ?type=tv/movie for anime details.'
+        error: 'Search query is required. Use ?q=naruto or ?s=naruto',
+        usage: {
+          search: '?q=naruto&page=1',
+          detail: '?slug=naruto-shippuden&type=tv'
+        }
       });
     }
+    
+    // Validate query length
+    if (query.length < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Search query must be at least 2 characters long'
+      });
+    }
+    
+    // Get page number
+    const page = parseInt(req.query.page) || 1;
+    
+    if (page < 1) {
+      return res.status(400).json({
+        success: false,
+        error: 'Page number must be greater than 0'
+      });
+    }
+    
+    const result = await scrapeSearchPage(query, page);
+    
+    if (!result.success && result.statusCode === 404) {
+      return res.status(404).json(result);
+    }
+    
+    res.status(result.success ? 200 : 500).json(result);
     
   } catch (error) {
     console.error('Handler error:', error);
