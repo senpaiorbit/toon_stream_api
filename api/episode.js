@@ -353,8 +353,8 @@ function scrapeSeasons($) {
   return seasons;
 }
 
-// NEW FUNCTION: Extract episode list
-function scrapeEpisodeList($) {
+// NEW FUNCTION: Extract episodes list
+function scrapeEpisodesList($) {
   const episodes = [];
   
   $('#episode_by_temp li').each((i, el) => {
@@ -362,18 +362,18 @@ function scrapeEpisodeList($) {
     const $article = $el.find('article.episodes');
     
     const episodeNumber = $article.find('.num-epi').text().trim();
-    const episodeTitle = $article.find('.entry-title').text().trim();
-    const episodeImage = extractImageUrl($article.find('.post-thumbnail img').attr('src'));
-    const episodeTime = $article.find('.entry-meta .time').text().trim();
-    const episodeUrl = $article.find('a.lnk-blk').attr('href');
+    const title = $article.find('.entry-title').text().trim();
+    const image = extractImageUrl($article.find('.post-thumbnail img').attr('src'));
+    const time = $article.find('.time').text().trim();
+    const url = $article.find('a.lnk-blk').attr('href');
     
-    if (episodeNumber && episodeUrl) {
+    if (episodeNumber && title && url) {
       episodes.push({
-        episodeNumber: episodeNumber,
-        title: episodeTitle,
-        image: episodeImage,
-        relativeTime: episodeTime,
-        url: episodeUrl
+        episodeNumber,
+        title,
+        image,
+        time,
+        url
       });
     }
   });
@@ -470,7 +470,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
     const allServers = await scrapeServers($);
     const filteredServers = filterServers(allServers, serverQuery);
     const seasons = scrapeSeasons($);
-    const episodeList = scrapeEpisodeList($); // NEW: Extract episode list
+    const episodesList = scrapeEpisodesList($); // NEW: Extract episodes list
     
     const data = {
       baseUrl,
@@ -483,7 +483,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
       cast: scrapeCast($),
       navigation: scrapeNavigation($),
       seasons: seasons,
-      episodes: episodeList, // NEW: Include episode list in response
+      episodes: episodesList, // NEW: Include episodes in response
       servers: filteredServers
     };
     
@@ -496,7 +496,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
         castCount: data.cast.length,
         categoriesCount: data.categories.length,
         seasonsCount: seasons.length,
-        episodesCount: episodeList.length // NEW: Episode count
+        episodesCount: episodesList.length // NEW: Episode count
       }
     };
     
@@ -557,3 +557,42 @@ module.exports = async (req, res) => {
     });
   }
 };
+```
+
+**Key Changes Made:**
+
+1. **Added `scrapeEpisodesList()` function** - This extracts all episode information from the `#episode_by_temp` list including:
+   - Episode number (e.g., "1x1")
+   - Title
+   - Thumbnail image
+   - Upload time
+   - Episode URL
+
+2. **Integrated into main scraper** - The `scrapeEpisodePage()` function now calls `scrapeEpisodesList()` and includes the results in the response
+
+3. **Added to stats** - The response now includes `episodesCount` in the stats object
+
+**Example Response Structure:**
+```json
+{
+  "success": true,
+  "data": {
+    "title": "Attack on Titan 1x1",
+    "seasons": [...],
+    "episodes": [
+      {
+        "episodeNumber": "1x1",
+        "title": "Attack on Titan 1x1",
+        "image": "https://image.tmdb.org/t/p/w185/4Ucsb3p1dedDCjcFtnY25txxRpA.jpg",
+        "time": "13 years ago",
+        "url": "https://toonstream.dad/episode/attack-on-titan-1x1/"
+      },
+      ...
+    ],
+    "servers": [...]
+  },
+  "stats": {
+    "episodesCount": 25,
+    ...
+  }
+}
