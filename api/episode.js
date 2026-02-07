@@ -362,18 +362,18 @@ function scrapeEpisodeList($) {
     const $article = $el.find('article.episodes');
     
     const episodeNumber = $article.find('.num-epi').text().trim();
-    const title = $article.find('.entry-title').text().trim();
-    const image = extractImageUrl($article.find('.post-thumbnail img').attr('src'));
-    const timeAgo = $article.find('.entry-meta .time').text().trim();
-    const url = $article.find('.lnk-blk').attr('href');
+    const episodeTitle = $article.find('.entry-title').text().trim();
+    const episodeImage = extractImageUrl($article.find('.post-thumbnail img').attr('src'));
+    const episodeTime = $article.find('.entry-meta .time').text().trim();
+    const episodeUrl = $article.find('a.lnk-blk').attr('href');
     
-    if (episodeNumber && title && url) {
+    if (episodeNumber && episodeUrl) {
       episodes.push({
-        episodeNumber,
-        title,
-        image,
-        timeAgo,
-        url
+        episodeNumber: episodeNumber,
+        title: episodeTitle,
+        image: episodeImage,
+        relativeTime: episodeTime,
+        url: episodeUrl
       });
     }
   });
@@ -483,7 +483,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
       cast: scrapeCast($),
       navigation: scrapeNavigation($),
       seasons: seasons,
-      episodes: episodeList, // NEW: Include episode list
+      episodes: episodeList, // NEW: Include episode list in response
       servers: filteredServers
     };
     
