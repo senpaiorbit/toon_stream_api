@@ -330,7 +330,7 @@ function scrapeNavigation($) {
   return nav;
 }
 
-// NEW FUNCTION: Extract seasons
+// Extract seasons
 function scrapeSeasons($) {
   const seasons = [];
   
@@ -351,6 +351,34 @@ function scrapeSeasons($) {
   });
   
   return seasons;
+}
+
+// NEW FUNCTION: Extract episode list
+function scrapeEpisodeList($) {
+  const episodes = [];
+  
+  $('#episode_by_temp li').each((i, el) => {
+    const $el = $(el);
+    const $article = $el.find('article.episodes');
+    
+    const episodeNumber = $article.find('.num-epi').text().trim();
+    const title = $article.find('.entry-title').text().trim();
+    const image = extractImageUrl($article.find('.post-thumbnail img').attr('src'));
+    const timeAgo = $article.find('.entry-meta .time').text().trim();
+    const url = $article.find('.lnk-blk').attr('href');
+    
+    if (episodeNumber && title && url) {
+      episodes.push({
+        episodeNumber,
+        title,
+        image,
+        timeAgo,
+        url
+      });
+    }
+  });
+  
+  return episodes;
 }
 
 // Extract servers/iframes
@@ -441,7 +469,8 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
     const metadata = scrapeEpisodeMetadata($);
     const allServers = await scrapeServers($);
     const filteredServers = filterServers(allServers, serverQuery);
-    const seasons = scrapeSeasons($); // NEW: Extract seasons
+    const seasons = scrapeSeasons($);
+    const episodeList = scrapeEpisodeList($); // NEW: Extract episode list
     
     const data = {
       baseUrl,
@@ -453,7 +482,8 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
       categories: scrapeCategories($),
       cast: scrapeCast($),
       navigation: scrapeNavigation($),
-      seasons: seasons, // NEW: Include seasons in response
+      seasons: seasons,
+      episodes: episodeList, // NEW: Include episode list
       servers: filteredServers
     };
     
@@ -465,7 +495,8 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
         serversReturned: filteredServers.length,
         castCount: data.cast.length,
         categoriesCount: data.categories.length,
-        seasonsCount: seasons.length // NEW: Season count
+        seasonsCount: seasons.length,
+        episodesCount: episodeList.length // NEW: Episode count
       }
     };
     
