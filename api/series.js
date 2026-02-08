@@ -2,98 +2,89 @@ export const config = {
   runtime: "edge",
 };
 
-const CF_PROXY_URL =
+const CF_PROXY_LIST =
   "https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt";
 
 let CF_BASE = null;
 let LAST_FETCH = 0;
-const CACHE_TTL = 10 * 60 * 1000;
+const TTL = 10 * 60 * 1000;
 
 async function getCFBase() {
-  if (CF_BASE && Date.now() - LAST_FETCH < CACHE_TTL) return CF_BASE;
+  if (CF_BASE && Date.now() - LAST_FETCH < TTL) return CF_BASE;
 
-  const res = await fetch(CF_PROXY_URL);
+  const res = await fetch(CF_PROXY_LIST);
   const txt = await res.text();
   CF_BASE = txt.split("\n").find(l => l.startsWith("https://")).trim();
   LAST_FETCH = Date.now();
   return CF_BASE;
 }
 
-const clean = (v) => v?.replace(/\s+/g, " ").trim() || null;
+const clean = (s) => s?.replace(/\s+/g, " ").trim() || null;
 
-function extractAll(html, regex) {
-  return [...html.matchAll(regex)].map(m => m[1]);
+const fixPoster = (src) => {
+  if (!src) return null;
+  let url = src.startsWith("//") ? "https:" + src : src;
+  return url.replace(/\/w\d+\//, "/w500/");
+};
+
+function extractFirst(html, regex) {
+  return clean(html.match(regex)?.[1]);
+}
+
+function extractList(html, regex) {
+  const m = html.match(regex);
+  if (!m) return [];
+  return [...m[1].matchAll(/>([^<]+)</g)].map(x => clean(x[1]));
 }
 
 function parseSeries(html, slug) {
-  const title = clean(html.match(/<h1 class="entry-title">(.*?)<\/h1>/)?.[1]);
-  const image = html.match(/<figure><img[^>]+src="([^"]+)"/)?.[1];
-  const rating = html.match(/TMDB<\/span>\s*([\d.]+)/)?.[1];
-  const year = html.match(/class="year[^"]*">(\d{4})<\/span>/)?.[1];
-  const totalSeasons = html.match(/<span>(\d+)<\/span>\s*Seasons/)?.[1];
-  const totalEpisodes = html.match(/<span>(\d+)<\/span>\s*Episodes/)?.[1];
-
-  const categories = extractAll(
-    html,
-    /class="genres">([\s\S]*?)<\/span>/
-  )[0]?.match(/>([^<]+)</g)?.map(x => x.replace(/[><]/g, ""));
-
-  const tags = extractAll(
-    html,
-    /class="tag fa-tag">([\s\S]*?)<\/span>/
-  )[0]?.match(/>([^<]+)</g)?.map(x => x.replace(/[><]/g, ""));
-
-  const cast = extractAll(
-    html,
-    /class="loadactor">([\s\S]*?)<\/p>/
-  )[0]?.match(/>([^<]+)</g)?.map(x => x.replace(/[><]/g, ""));
-
-  const seasonMenu = [...html.matchAll(/data-season="(\d+)"/g)]
-    .map(s => Number(s[1]))
-    .filter((v, i, a) => a.indexOf(v) === i)
-    .sort((a, b) => a - b)
-    .map(n => ({
-      seasonNumber: n,
-      name: `Season ${n}`
-    }));
-
   return {
     seriesSlug: slug,
-    title,
-    image: image?.startsWith("//") ? "https:" + image : image,
-    rating,
-    year,
-    totalSeasons: Number(totalSeasons),
-    totalEpisodes: Number(totalEpisodes),
-    requestedSeasons: seasonMenu.map(s => s.seasonNumber),
+    title: extractFirst(html, /<h1 class="entry-title">(.*?)<\/h1>/),
+    image: fixPoster(
+      html.match(/<figure><img[^>]+src="([^"]+)"/)?.[1]
+    ),
+    rating: extractFirst(html, /TMDB<\/span>\s*([\d.]+)/),
+    year: extractFirst(html, /class="year[^"]*">(\d{4})<\/span>/),
+    totalSeasons: Number(
+      extractFirst(html, /<span>(\d+)<\/span>\s*Seasons/)
+    ),
+    totalEpisodes: Number(
+      extractFirst(html, /<span>(\d+)<\/span>\s*Episodes/)
+    ),
     includeServerSources: true,
-    availableSeasons: seasonMenu,
-    categories,
-    tags,
-    cast
+    categories: extractList(html, /class="genres">([\s\S]*?)<\/span>/),
+    tags: extractList(html, /class="tag fa-tag">([\s\S]*?)<\/span>/),
+    cast: extractList(html, /class="loadactor">([\s\S]*?)<\/p>/),
+    availableSeasons: [
+      ...new Set(
+        [...html.matchAll(/data-season="(\d+)"/g)].map(m => Number(m[1]))
+      )
+    ].sort((a, b) => a - b).map(n => ({
+      seasonNumber: n,
+      name: `Season ${n}`
+    }))
   };
 }
 
 function parseEpisodes(html) {
   const episodes = [];
-
   const blocks = html.split('<article class="post dfx fcl episodes').slice(1);
+
   for (const b of blocks) {
-    const episodeNumber = b.match(/<span class="num-epi">(.*?)<\/span>/)?.[1];
-    const title = clean(b.match(/<h2 class="entry-title">(.*?)<\/h2>/)?.[1]);
-    const image = b.match(/<img[^>]+src="([^"]+)"/)?.[1];
-    const time = clean(b.match(/class="time">(.*?)<\/span>/)?.[1]);
+    const ep = extractFirst(b, /<span class="num-epi">(.*?)<\/span>/);
+    const title = extractFirst(b, /<h2 class="entry-title">(.*?)<\/h2>/);
+    const img = fixPoster(b.match(/<img[^>]+src="([^"]+)"/)?.[1]);
+    const time = extractFirst(b, /class="time">(.*?)<\/span>/);
     const url = b.match(/<a href="([^"]+\/episode\/[^"]+)"/)?.[1];
 
-    if (!episodeNumber || !url) continue;
-
-    const seasonNumber = Number(episodeNumber.split("x")[0]);
+    if (!ep || !url) continue;
 
     episodes.push({
-      seasonNumber,
-      episodeNumber,
+      seasonNumber: Number(ep.split("x")[0]),
+      episodeNumber: ep,
       title,
-      image: image?.startsWith("//") ? "https:" + image : image,
+      image: img,
       time,
       url,
       servers: [
@@ -106,7 +97,6 @@ function parseEpisodes(html) {
       ]
     });
   }
-
   return episodes;
 }
 
@@ -115,13 +105,14 @@ export default async function handler(req) {
     const { searchParams } = new URL(req.url);
     const slug = searchParams.get("slug");
     if (!slug) {
-      return new Response(JSON.stringify({ error: "slug required" }), { status: 400 });
+      return new Response(
+        JSON.stringify({ success: false, error: "slug required" }),
+        { status: 400 }
+      );
     }
 
     const cf = await getCFBase();
-    const target = `${cf}?path=/series/${slug}/`;
-
-    const res = await fetch(target, {
+    const res = await fetch(`${cf}?path=/series/${slug}/`, {
       headers: { "user-agent": "Mozilla/5.0 ToonStreamEdge" }
     });
 
@@ -151,6 +142,7 @@ export default async function handler(req) {
           success: true,
           data: {
             ...series,
+            requestedSeasons: seasons.map(s => s.seasonNumber),
             seasons
           },
           stats: {
