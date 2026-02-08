@@ -66,6 +66,264 @@ async function getProxyUrl() {
   }
 }
 
+class HTMLParser {
+  constructor(html) {
+    this.html = html;
+  }
+
+  querySelectorAll(selector) {
+    const results = [];
+    
+    if (selector === '.aa-tbs.cat-t a') {
+      const regex = /<a[^>]*class="[^"]*"[^>]*data-post="([^"]*)"[^>]*href="([^"]*)"[^>]*class="([^"]*)"[^>]*>([^<]*)<\/a>/g;
+      const regex2 = /<a[^>]*data-post="([^"]*)"[^>]*href="([^"]*)"[^>]*class="([^"]*)"[^>]*>([^<]*)<\/a>/g;
+      
+      let match;
+      while ((match = regex.exec(this.html)) !== null || (match = regex2.exec(this.html)) !== null) {
+        if (match && this.html.substring(Math.max(0, match.index - 100), match.index).includes('aa-tbs cat-t')) {
+          results.push({
+            getAttribute: (attr) => {
+              if (attr === 'data-post') return match[1] || 'movies-series';
+              if (attr === 'href') return match[2] || '';
+              return null;
+            },
+            textContent: match[4] || '',
+            classList: {
+              contains: (cls) => (match[3] || '').includes(cls)
+            }
+          });
+        }
+      }
+    }
+    
+    if (selector === '.section.movies .post-lst li') {
+      const liRegex = /<li[^>]*id="(post-\d+)"[^>]*class="([^"]*)"[^>]*>([\s\S]*?)<\/li>/g;
+      let match;
+      
+      while ((match = liRegex.exec(this.html)) !== null) {
+        const liContent = match[3];
+        const postId = match[1];
+        const classList = match[2];
+        
+        results.push({
+          getAttribute: (attr) => {
+            if (attr === 'id') return postId;
+            if (attr === 'class') return classList;
+            return null;
+          },
+          querySelector: (sel) => {
+            if (sel === '.lnk-blk') {
+              const hrefMatch = liContent.match(/href="([^"]*)"/);
+              return {
+                getAttribute: (attr) => attr === 'href' ? (hrefMatch ? hrefMatch[1] : '') : null
+              };
+            }
+            if (sel === 'img') {
+              const srcMatch = liContent.match(/src="([^"]*)"/);
+              const altMatch = liContent.match(/alt="([^"]*)"/);
+              return {
+                getAttribute: (attr) => {
+                  if (attr === 'src') return srcMatch ? srcMatch[1] : null;
+                  if (attr === 'alt') return altMatch ? altMatch[1] : '';
+                  return null;
+                }
+              };
+            }
+            if (sel === '.entry-title') {
+              const titleMatch = liContent.match(/<h2[^>]*class="entry-title"[^>]*>([^<]*)<\/h2>/);
+              return {
+                textContent: titleMatch ? titleMatch[1] : ''
+              };
+            }
+            if (sel === '.vote') {
+              const voteMatch = liContent.match(/<span[^>]*class="vote"[^>]*>[\s\S]*?<span>TMDB<\/span>\s*([^<]*)<\/span>/);
+              return voteMatch ? {
+                textContent: 'TMDB' + voteMatch[1]
+              } : null;
+            }
+            return null;
+          }
+        });
+      }
+    }
+    
+    if (selector === '#widget_list_movies_series-4 .post-lst li') {
+      const widgetRegex = /<section[^>]*id="widget_list_movies_series-4"[^>]*>([\s\S]*?)<\/section>/;
+      const widgetMatch = this.html.match(widgetRegex);
+      
+      if (widgetMatch) {
+        const widgetContent = widgetMatch[1];
+        const liRegex = /<li[^>]*id="(post-\d+)"[^>]*class="([^"]*)"[^>]*>([\s\S]*?)<\/li>/g;
+        let match;
+        
+        while ((match = liRegex.exec(widgetContent)) !== null) {
+          const liContent = match[3];
+          const postId = match[1];
+          const classList = match[2];
+          
+          results.push({
+            getAttribute: (attr) => {
+              if (attr === 'id') return postId;
+              if (attr === 'class') return classList;
+              return null;
+            },
+            querySelector: (sel) => {
+              if (sel === '.lnk-blk') {
+                const hrefMatch = liContent.match(/href="([^"]*)"/);
+                return {
+                  getAttribute: (attr) => attr === 'href' ? (hrefMatch ? hrefMatch[1] : '') : null
+                };
+              }
+              if (sel === 'img') {
+                const srcMatch = liContent.match(/src="([^"]*)"/);
+                const altMatch = liContent.match(/alt="([^"]*)"/);
+                return {
+                  getAttribute: (attr) => {
+                    if (attr === 'src') return srcMatch ? srcMatch[1] : null;
+                    if (attr === 'alt') return altMatch ? altMatch[1] : '';
+                    return null;
+                  }
+                };
+              }
+              if (sel === '.entry-title') {
+                const titleMatch = liContent.match(/<h2[^>]*class="entry-title"[^>]*>([^<]*)<\/h2>/);
+                return {
+                  textContent: titleMatch ? titleMatch[1] : ''
+                };
+              }
+              if (sel === '.vote') {
+                const voteMatch = liContent.match(/<span[^>]*class="vote"[^>]*>[\s\S]*?<span>TMDB<\/span>\s*([^<]*)<\/span>/);
+                return voteMatch ? {
+                  textContent: 'TMDB' + voteMatch[1]
+                } : null;
+              }
+              return null;
+            }
+          });
+        }
+      }
+    }
+    
+    if (selector === '#widget_list_movies_series-5 .post-lst li') {
+      const widgetRegex = /<section[^>]*id="widget_list_movies_series-5"[^>]*>([\s\S]*?)<\/section>/;
+      const widgetMatch = this.html.match(widgetRegex);
+      
+      if (widgetMatch) {
+        const widgetContent = widgetMatch[1];
+        const liRegex = /<li[^>]*id="(post-\d+)"[^>]*class="([^"]*)"[^>]*>([\s\S]*?)<\/li>/g;
+        let match;
+        
+        while ((match = liRegex.exec(widgetContent)) !== null) {
+          const liContent = match[3];
+          const postId = match[1];
+          const classList = match[2];
+          
+          results.push({
+            getAttribute: (attr) => {
+              if (attr === 'id') return postId;
+              if (attr === 'class') return classList;
+              return null;
+            },
+            querySelector: (sel) => {
+              if (sel === '.lnk-blk') {
+                const hrefMatch = liContent.match(/href="([^"]*)"/);
+                return {
+                  getAttribute: (attr) => attr === 'href' ? (hrefMatch ? hrefMatch[1] : '') : null
+                };
+              }
+              if (sel === 'img') {
+                const srcMatch = liContent.match(/src="([^"]*)"/);
+                const altMatch = liContent.match(/alt="([^"]*)"/);
+                return {
+                  getAttribute: (attr) => {
+                    if (attr === 'src') return srcMatch ? srcMatch[1] : null;
+                    if (attr === 'alt') return altMatch ? altMatch[1] : '';
+                    return null;
+                  }
+                };
+              }
+              if (sel === '.entry-title') {
+                const titleMatch = liContent.match(/<h2[^>]*class="entry-title"[^>]*>([^<]*)<\/h2>/);
+                return {
+                  textContent: titleMatch ? titleMatch[1] : ''
+                };
+              }
+              if (sel === '.vote') {
+                const voteMatch = liContent.match(/<span[^>]*class="vote"[^>]*>[\s\S]*?<span>TMDB<\/span>\s*([^<]*)<\/span>/);
+                return voteMatch ? {
+                  textContent: 'TMDB' + voteMatch[1]
+                } : null;
+              }
+              return null;
+            }
+          });
+        }
+      }
+    }
+    
+    if (selector === '.navigation.pagination .nav-links a') {
+      const navRegex = /<nav[^>]*class="navigation pagination"[^>]*>([\s\S]*?)<\/nav>/;
+      const navMatch = this.html.match(navRegex);
+      
+      if (navMatch) {
+        const navContent = navMatch[1];
+        const aRegex = /<a[^>]*class="([^"]*)"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g;
+        let match;
+        
+        while ((match = aRegex.exec(navContent)) !== null) {
+          results.push({
+            getAttribute: (attr) => attr === 'href' ? match[2] : null,
+            textContent: match[3],
+            classList: {
+              contains: (cls) => match[1].includes(cls)
+            }
+          });
+        }
+      }
+    }
+    
+    if (selector.match(/^#(monday|tuesday|wednesday|thursday|friday|saturday|sunday) \.custom-schedule-item$/)) {
+      const day = selector.match(/^#(\w+)/)[1];
+      const dayRegex = new RegExp(`<div[^>]*id="${day}"[^>]*>([\\s\\S]*?)<\\/div>\\s*(?=<div[^>]*class="custom-tab-pane|$)`);
+      const dayMatch = this.html.match(dayRegex);
+      
+      if (dayMatch) {
+        const dayContent = dayMatch[1];
+        const itemRegex = /<li[^>]*class="custom-schedule-item"[^>]*>([\s\S]*?)<\/li>/g;
+        let match;
+        
+        while ((match = itemRegex.exec(dayContent)) !== null) {
+          const itemContent = match[1];
+          
+          results.push({
+            querySelector: (sel) => {
+              if (sel === '.schedule-time') {
+                const timeMatch = itemContent.match(/<span[^>]*class="schedule-time"[^>]*>([^<]*)<\/span>/);
+                return timeMatch ? { textContent: timeMatch[1] } : null;
+              }
+              if (sel === '.schedule-description') {
+                const descMatch = itemContent.match(/<p[^>]*class="schedule-description"[^>]*>([^<]*)<\/p>/);
+                return descMatch ? { textContent: descMatch[1] } : null;
+              }
+              return null;
+            }
+          });
+        }
+      }
+    }
+    
+    return results;
+  }
+
+  querySelector(selector) {
+    if (selector === '.section-title') {
+      const match = this.html.match(/<h1[^>]*class="section-title"[^>]*>([^<]*)<\/h1>/);
+      return match ? { textContent: match[1] } : null;
+    }
+    return null;
+  }
+}
+
 function extractImageUrl(imgSrc) {
   if (!imgSrc) return null;
   if (imgSrc.startsWith('//')) {
@@ -373,8 +631,7 @@ async function scrapeCategoryPage(baseUrl, categoryPath, pageNumber = 1, content
     
     const html = await fetchWithProxy(categoryUrl, baseUrl);
     
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    const doc = new HTMLParser(html);
     
     const pageTitle = doc.querySelector('.section-title');
     
