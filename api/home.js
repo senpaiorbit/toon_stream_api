@@ -1,8 +1,9 @@
 // api/home.js
 const cheerio = require('cheerio');
 
-// Cache for base URL (5 minutes)
+// Cache for base URL and proxy URL (5 minutes)
 let baseUrlCache = { url: null, timestamp: 0 };
+let proxyUrlCache = { url: null, timestamp: 0 };
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Fetch base URL from GitHub with caching
@@ -35,13 +36,42 @@ async function getBaseUrl() {
   return fallbackUrl;
 }
 
-// Fetch function
-async function fetchPage(targetUrl) {
+// Fetch proxy URL from GitHub with caching
+async function getProxyUrl() {
+  const now = Date.now();
+  
+  if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
+    return proxyUrlCache.url;
+  }
+  
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+      }
+    });
+    
+    if (response.ok) {
+      const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
+      proxyUrlCache = { url: proxyUrl, timestamp: now };
+      return proxyUrl;
+    }
+  } catch (error) {
+    console.error('Error fetching proxy URL from GitHub:', error.message);
+  }
+  
+  proxyUrlCache = { url: null, timestamp: now };
+  return null;
+}
+
+// Fetch with proxy fallback - CLOUDFLARE WORKER RETURNS HTML AS TEXT/PLAIN
+async function fetchWithProxy(targetUrl) {
+  const proxyUrl = await getProxyUrl();
   const baseUrl = await getBaseUrl();
   
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
     'Cache-Control': 'max-age=0',
@@ -56,22 +86,45 @@ async function fetchPage(targetUrl) {
     'Referer': baseUrl
   };
   
+  // Try proxy first - CONSUME AS TEXT (Cloudflare returns text/plain)
+  if (proxyUrl) {
+    try {
+      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+      const proxyResponse = await fetch(proxyFetchUrl, {
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000)
+      });
+      
+      if (proxyResponse.ok) {
+        const html = await proxyResponse.text();
+        console.log('✓ Proxy fetch successful (HTML as text/plain)');
+        return html;
+      } else {
+        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
+      }
+    } catch (proxyError) {
+      console.log('✗ Proxy fetch failed:', proxyError.message);
+    }
+  }
+  
+  // Fallback to direct fetch
   try {
-    const response = await fetch(targetUrl, {
+    const directResponse = await fetch(targetUrl, {
       headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(30000)
     });
     
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    if (!directResponse.ok) {
+      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
     }
     
-    const html = await response.text();
-    console.log('✓ Fetch successful');
+    const html = await directResponse.text();
+    console.log('✓ Direct fetch successful');
     return html;
-  } catch (error) {
-    throw new Error(`Fetch failed: ${error.message}`);
+  } catch (directError) {
+    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
   }
 }
 
@@ -264,7 +317,7 @@ async function scrapeHomePage(baseUrl) {
     const homeUrl = `${baseUrl}/home`;
     console.log(`Scraping: ${homeUrl}`);
     
-    const html = await fetchPage(homeUrl);
+    const html = await fetchWithProxy(homeUrl);
     const $ = cheerio.load(html);
     
     const data = {
