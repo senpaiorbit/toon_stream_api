@@ -1,16 +1,68 @@
-// api/category.js
-const axios = require('axios');
-const cheerio = require('cheerio');
-const fs = require('fs');
-const path = require('path');
+export const config = {
+  runtime: 'edge',
+};
 
-function getBaseUrl() {
+// Cache for base URL and proxy URL
+let cachedBaseUrl = null;
+let cachedProxyUrl = null;
+let baseUrlCacheTime = 0;
+let proxyUrlCacheTime = 0;
+const CACHE_DURATION = 300000; // 5 minutes
+
+async function getBaseUrl() {
+  const now = Date.now();
+  if (cachedBaseUrl && (now - baseUrlCacheTime) < CACHE_DURATION) {
+    return cachedBaseUrl;
+  }
+  
   try {
-    const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
-    const baseUrl = fs.readFileSync(baseUrlPath, 'utf-8').trim();
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
+      headers: {
+        'Accept': 'text/plain,*/*',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch base URL');
+    }
+    
+    const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
+    cachedBaseUrl = baseUrl;
+    baseUrlCacheTime = now;
     return baseUrl;
   } catch (error) {
-    console.error('Error reading baseurl.txt:', error);
+    console.error('Error fetching baseurl.txt:', error);
+    cachedBaseUrl = 'https://toonstream.dad';
+    baseUrlCacheTime = now;
+    return cachedBaseUrl;
+  }
+}
+
+async function getProxyUrl() {
+  const now = Date.now();
+  if (cachedProxyUrl && (now - proxyUrlCacheTime) < CACHE_DURATION) {
+    return cachedProxyUrl;
+  }
+  
+  try {
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
+      headers: {
+        'Accept': 'text/plain,*/*',
+      },
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch proxy URL');
+    }
+    
+    const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
+    cachedProxyUrl = proxyUrl;
+    proxyUrlCacheTime = now;
+    return proxyUrl;
+  } catch (error) {
+    console.error('Error fetching cf_proxy.txt:', error);
+    cachedProxyUrl = null;
+    proxyUrlCacheTime = now;
     return null;
   }
 }
@@ -95,45 +147,43 @@ function extractMetadata(classList) {
   return metadata;
 }
 
-// Scrape category tabs
-function scrapeCategoryTabs($) {
+function scrapeCategoryTabs(doc) {
   const tabs = [];
+  const elements = doc.querySelectorAll('.aa-tbs.cat-t a');
   
-  $('.aa-tbs.cat-t a').each((index, element) => {
-    const $elem = $(element);
+  elements.forEach((element) => {
     tabs.push({
-      label: $elem.text().trim(),
-      url: $elem.attr('href') || '',
-      active: $elem.hasClass('on'),
-      type: $elem.attr('data-post') || 'movies-series'
+      label: element.textContent.trim(),
+      url: element.getAttribute('href') || '',
+      active: element.classList.contains('on'),
+      type: element.getAttribute('data-post') || 'movies-series'
     });
   });
   
   return tabs;
 }
 
-// Scrape content items
-function scrapeContent($) {
+function scrapeContent(doc) {
   const content = [];
+  const elements = doc.querySelectorAll('.section.movies .post-lst li');
   
-  $('.section.movies .post-lst li').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
-    const postId = $elem.attr('id');
-    const classList = $elem.attr('class');
+  elements.forEach((element) => {
+    const link = element.querySelector('.lnk-blk');
+    const img = element.querySelector('img');
+    const title = element.querySelector('.entry-title');
+    const vote = element.querySelector('.vote');
+    const postId = element.getAttribute('id');
+    const classList = element.getAttribute('class');
     
     const metadata = extractMetadata(classList);
     
     content.push({
       id: postId || '',
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null,
+      title: title ? title.textContent.trim() : '',
+      image: extractImageUrl(img ? img.getAttribute('src') : null),
+      imageAlt: img ? (img.getAttribute('alt') || '') : '',
+      url: link ? (link.getAttribute('href') || '') : '',
+      rating: vote ? vote.textContent.replace('TMDB', '').trim() : null,
       ...metadata
     });
   });
@@ -141,8 +191,7 @@ function scrapeContent($) {
   return content;
 }
 
-// Scrape pagination
-function scrapePagination($) {
+function scrapePagination(doc) {
   const pagination = {
     currentPage: 1,
     totalPages: 1,
@@ -151,12 +200,13 @@ function scrapePagination($) {
     prevUrl: null
   };
   
-  $('.navigation.pagination .nav-links a').each((index, element) => {
-    const $elem = $(element);
-    const text = $elem.text().trim();
-    const href = $elem.attr('href');
+  const elements = doc.querySelectorAll('.navigation.pagination .nav-links a');
+  
+  elements.forEach((element) => {
+    const text = element.textContent.trim();
+    const href = element.getAttribute('href');
     
-    if ($elem.hasClass('current')) {
+    if (element.classList.contains('current')) {
       pagination.currentPage = parseInt(text) || 1;
     }
     
@@ -168,7 +218,7 @@ function scrapePagination($) {
       pagination.pages.push({
         page: parseInt(text),
         url: href,
-        current: $elem.hasClass('current')
+        current: element.classList.contains('current')
       });
       
       const pageNum = parseInt(text);
@@ -181,28 +231,27 @@ function scrapePagination($) {
   return pagination;
 }
 
-// Scrape random series sidebar
-function scrapeRandomSeries($) {
+function scrapeRandomSeries(doc) {
   const randomSeries = [];
+  const elements = doc.querySelectorAll('#widget_list_movies_series-4 .post-lst li');
   
-  $('#widget_list_movies_series-4 .post-lst li').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
-    const postId = $elem.attr('id');
-    const classList = $elem.attr('class');
+  elements.forEach((element) => {
+    const link = element.querySelector('.lnk-blk');
+    const img = element.querySelector('img');
+    const title = element.querySelector('.entry-title');
+    const vote = element.querySelector('.vote');
+    const postId = element.getAttribute('id');
+    const classList = element.getAttribute('class');
     
     const metadata = extractMetadata(classList);
     
     randomSeries.push({
       id: postId || '',
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null,
+      title: title ? title.textContent.trim() : '',
+      image: extractImageUrl(img ? img.getAttribute('src') : null),
+      imageAlt: img ? (img.getAttribute('alt') || '') : '',
+      url: link ? (link.getAttribute('href') || '') : '',
+      rating: vote ? vote.textContent.replace('TMDB', '').trim() : null,
       ...metadata
     });
   });
@@ -210,28 +259,27 @@ function scrapeRandomSeries($) {
   return randomSeries;
 }
 
-// Scrape random movies sidebar
-function scrapeRandomMovies($) {
+function scrapeRandomMovies(doc) {
   const randomMovies = [];
+  const elements = doc.querySelectorAll('#widget_list_movies_series-5 .post-lst li');
   
-  $('#widget_list_movies_series-5 .post-lst li').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
-    const postId = $elem.attr('id');
-    const classList = $elem.attr('class');
+  elements.forEach((element) => {
+    const link = element.querySelector('.lnk-blk');
+    const img = element.querySelector('img');
+    const title = element.querySelector('.entry-title');
+    const vote = element.querySelector('.vote');
+    const postId = element.getAttribute('id');
+    const classList = element.getAttribute('class');
     
     const metadata = extractMetadata(classList);
     
     randomMovies.push({
       id: postId || '',
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null,
+      title: title ? title.textContent.trim() : '',
+      image: extractImageUrl(img ? img.getAttribute('src') : null),
+      imageAlt: img ? (img.getAttribute('alt') || '') : '',
+      url: link ? (link.getAttribute('href') || '') : '',
+      rating: vote ? vote.textContent.replace('TMDB', '').trim() : null,
       ...metadata
     });
   });
@@ -239,22 +287,21 @@ function scrapeRandomMovies($) {
   return randomMovies;
 }
 
-// Scrape schedule
-function scrapeSchedule($) {
+function scrapeSchedule(doc) {
   const schedule = {};
   const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
   
   days.forEach(day => {
     const daySchedule = [];
+    const elements = doc.querySelectorAll(`#${day} .custom-schedule-item`);
     
-    $(`#${day} .custom-schedule-item`).each((index, element) => {
-      const $elem = $(element);
-      const $time = $elem.find('.schedule-time');
-      const $description = $elem.find('.schedule-description');
+    elements.forEach((element) => {
+      const time = element.querySelector('.schedule-time');
+      const description = element.querySelector('.schedule-description');
       
       daySchedule.push({
-        time: $time.text().trim(),
-        show: $description.text().trim()
+        time: time ? time.textContent.trim() : '',
+        show: description ? description.textContent.trim() : ''
       });
     });
     
@@ -264,10 +311,51 @@ function scrapeSchedule($) {
   return schedule;
 }
 
-// Main scraper function
+async function fetchWithProxy(targetUrl, baseUrl) {
+  const proxyUrl = await getProxyUrl();
+  
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Referer': baseUrl,
+  };
+  
+  if (proxyUrl) {
+    try {
+      const proxyResponse = await fetch(`${proxyUrl}?url=${encodeURIComponent(targetUrl)}`, {
+        headers,
+        cf: {
+          cacheTtl: 300,
+          cacheEverything: true,
+        },
+      });
+      
+      if (proxyResponse.ok) {
+        return await proxyResponse.text();
+      }
+    } catch (error) {
+      console.error('Proxy fetch failed:', error);
+    }
+  }
+  
+  const directResponse = await fetch(targetUrl, {
+    headers,
+    cf: {
+      cacheTtl: 300,
+      cacheEverything: true,
+    },
+  });
+  
+  if (!directResponse.ok) {
+    throw new Error(`HTTP ${directResponse.status}`);
+  }
+  
+  return await directResponse.text();
+}
+
 async function scrapeCategoryPage(baseUrl, categoryPath, pageNumber = 1, contentType = null) {
   try {
-    // Remove leading/trailing slashes from categoryPath
     categoryPath = categoryPath.replace(/^\/+|\/+$/g, '');
     
     let categoryUrl;
@@ -283,33 +371,28 @@ async function scrapeCategoryPage(baseUrl, categoryPath, pageNumber = 1, content
     
     console.log(`Scraping: ${categoryUrl}`);
     
-    const response = await axios.get(categoryUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      },
-      timeout: 30000
-    });
+    const html = await fetchWithProxy(categoryUrl, baseUrl);
     
-    const $ = cheerio.load(response.data);
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
     
-    // Get page title
-    const pageTitle = $('.section-title').first().text().trim();
+    const pageTitle = doc.querySelector('.section-title');
     
     const data = {
       baseUrl: baseUrl,
       pageUrl: categoryUrl,
       pageType: 'category',
       categoryPath: categoryPath,
-      categoryTitle: pageTitle,
+      categoryTitle: pageTitle ? pageTitle.textContent.trim() : '',
       pageNumber: pageNumber,
       contentTypeFilter: contentType || 'all',
       scrapedAt: new Date().toISOString(),
-      categoryTabs: scrapeCategoryTabs($),
-      content: scrapeContent($),
-      pagination: scrapePagination($),
-      randomSeries: scrapeRandomSeries($),
-      randomMovies: scrapeRandomMovies($),
-      schedule: scrapeSchedule($)
+      categoryTabs: scrapeCategoryTabs(doc),
+      content: scrapeContent(doc),
+      pagination: scrapePagination(doc),
+      randomSeries: scrapeRandomSeries(doc),
+      randomMovies: scrapeRandomMovies(doc),
+      schedule: scrapeSchedule(doc)
     };
     
     return {
@@ -330,7 +413,7 @@ async function scrapeCategoryPage(baseUrl, categoryPath, pageNumber = 1, content
   } catch (error) {
     console.error('Scraping error:', error.message);
     
-    if (error.response && error.response.status === 404) {
+    if (error.message.includes('404')) {
       return {
         success: false,
         error: 'Category page not found',
@@ -345,78 +428,118 @@ async function scrapeCategoryPage(baseUrl, categoryPath, pageNumber = 1, content
   }
 }
 
-// Vercel serverless function handler
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-  
+export default async function handler(req) {
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version',
+      },
+    });
   }
   
   if (req.method !== 'GET') {
-    return res.status(405).json({ 
+    return new Response(JSON.stringify({ 
       success: false, 
       error: 'Method not allowed. Use GET request.' 
+    }), {
+      status: 405,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
     });
   }
   
   try {
-    const baseUrl = getBaseUrl();
+    const baseUrl = await getBaseUrl();
     
     if (!baseUrl) {
-      return res.status(500).json({ 
+      return new Response(JSON.stringify({ 
         success: false, 
         error: 'Base URL not found. Please check src/baseurl.txt file.' 
+      }), {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
       });
     }
     
-    // Get category path from query parameter
-    const categoryPath = req.query.path;
+    const url = new URL(req.url);
+    const categoryPath = url.searchParams.get('path');
     
     if (!categoryPath) {
-      return res.status(400).json({
+      return new Response(JSON.stringify({
         success: false,
         error: 'Category path is required. Use ?path=crunchyroll or ?path=language/hindi-language'
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
       });
     }
     
-    // Get page number from query parameter
-    const pageNumber = parseInt(req.query.page) || 1;
+    const pageNumber = parseInt(url.searchParams.get('page')) || 1;
     
     if (pageNumber < 1) {
-      return res.status(400).json({
+      return new Response(JSON.stringify({
         success: false,
         error: 'Invalid page number. Must be 1 or greater.'
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
       });
     }
     
-    // Get content type filter (optional)
-    const contentType = req.query.type || null;
+    const contentType = url.searchParams.get('type') || null;
     if (contentType && !['movies', 'series', 'post'].includes(contentType)) {
-      return res.status(400).json({
+      return new Response(JSON.stringify({
         success: false,
         error: 'Invalid type parameter. Must be: movies, series, or post'
+      }), {
+        status: 400,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+        },
       });
     }
     
     const result = await scrapeCategoryPage(baseUrl, categoryPath, pageNumber, contentType);
     
-    if (!result.success && result.statusCode === 404) {
-      return res.status(404).json(result);
-    }
+    const status = !result.success && result.statusCode === 404 ? 404 : (result.success ? 200 : 500);
     
-    res.status(result.success ? 200 : 500).json(result);
+    return new Response(JSON.stringify(result), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+      },
+    });
     
   } catch (error) {
     console.error('Handler error:', error);
-    res.status(500).json({ 
+    return new Response(JSON.stringify({ 
       success: false, 
       error: 'Internal server error', 
       message: error.message 
+    }), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
     });
   }
-};
+}
