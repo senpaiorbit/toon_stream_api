@@ -2,12 +2,11 @@ export const config = {
   runtime: 'edge',
 };
 
-// Cache for base URL and proxy URL
 let cachedBaseUrl = null;
 let cachedProxyUrl = null;
 let baseUrlCacheTime = 0;
 let proxyUrlCacheTime = 0;
-const CACHE_DURATION = 300000; // 5 minutes
+const CACHE_DURATION = 300000;
 
 async function getBaseUrl() {
   const now = Date.now();
@@ -323,7 +322,8 @@ async function fetchWithProxy(targetUrl, baseUrl) {
   
   if (proxyUrl) {
     try {
-      const proxyResponse = await fetch(`${proxyUrl}?url=${encodeURIComponent(targetUrl)}`, {
+      const pathParam = targetUrl.replace(baseUrl, '');
+      const proxyResponse = await fetch(`${proxyUrl}?path=${encodeURIComponent(pathParam)}`, {
         headers,
         cf: {
           cacheTtl: 300,
@@ -476,7 +476,7 @@ export default async function handler(req) {
     if (!categoryPath) {
       return new Response(JSON.stringify({
         success: false,
-        error: 'Category path is required. Use ?path=crunchyroll or ?path=language/hindi-language'
+        error: 'Category path is required. Use ?path=anime or ?path=language/hindi-language'
       }), {
         status: 400,
         headers: {
