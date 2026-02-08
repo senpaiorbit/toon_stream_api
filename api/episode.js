@@ -1,9 +1,8 @@
 // api/episode.js
 const cheerio = require('cheerio');
 
-// Cache for base URL and proxy URL (5 minutes)
+// Cache for base URL (5 minutes)
 let baseUrlCache = { url: null, timestamp: 0 };
-let proxyUrlCache = { url: null, timestamp: 0 };
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Fetch base URL from GitHub with caching
@@ -36,42 +35,13 @@ async function getBaseUrl() {
   return fallbackUrl;
 }
 
-// Fetch proxy URL from GitHub with caching
-async function getProxyUrl() {
-  const now = Date.now();
-  
-  if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
-    return proxyUrlCache.url;
-  }
-  
-  try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
-    if (response.ok) {
-      const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
-      proxyUrlCache = { url: proxyUrl, timestamp: now };
-      return proxyUrl;
-    }
-  } catch (error) {
-    console.error('Error fetching proxy URL from GitHub:', error.message);
-  }
-  
-  proxyUrlCache = { url: null, timestamp: now };
-  return null;
-}
-
-// Fetch with proxy fallback
-async function fetchWithProxy(targetUrl, refererUrl = null) {
-  const proxyUrl = await getProxyUrl();
+// Direct fetch with proper headers
+async function fetchPage(targetUrl, refererUrl = null) {
   const baseUrl = await getBaseUrl();
   
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
     'Accept-Language': 'en-US,en;q=0.9',
     'Accept-Encoding': 'gzip, deflate, br',
     'Cache-Control': 'max-age=0',
@@ -86,45 +56,22 @@ async function fetchWithProxy(targetUrl, refererUrl = null) {
     'Referer': refererUrl || baseUrl
   };
   
-  // Try proxy first
-  if (proxyUrl) {
-    try {
-      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
-      const proxyResponse = await fetch(proxyFetchUrl, {
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(30000)
-      });
-      
-      if (proxyResponse.ok) {
-        const html = await proxyResponse.text();
-        console.log('✓ Proxy fetch successful (HTML as text/plain)');
-        return html;
-      } else {
-        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
-      }
-    } catch (proxyError) {
-      console.log('✗ Proxy fetch failed:', proxyError.message);
-    }
-  }
-  
-  // Fallback to direct fetch
   try {
-    const directResponse = await fetch(targetUrl, {
+    const response = await fetch(targetUrl, {
       headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(30000)
     });
     
-    if (!directResponse.ok) {
-      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     
-    const html = await directResponse.text();
-    console.log('✓ Direct fetch successful');
+    const html = await response.text();
+    console.log('✓ Page fetch successful');
     return html;
-  } catch (directError) {
-    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
+  } catch (error) {
+    throw new Error(`Failed to fetch page: ${error.message}`);
   }
 }
 
@@ -180,7 +127,7 @@ function parseServerNames(serverParam) {
   return serverParam.split(',').map(s => s.trim().toLowerCase());
 }
 
-// Extract iframe from HTML (embedded logic)
+// Extract iframe from HTML
 async function extractIframeFromUrl(originalUrl) {
   try {
     console.log(`Extracting iframe from: ${originalUrl}`);
@@ -190,7 +137,7 @@ async function extractIframeFromUrl(originalUrl) {
     
     const headers = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
       'Accept-Encoding': 'gzip, deflate, br',
       'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
@@ -203,61 +150,34 @@ async function extractIframeFromUrl(originalUrl) {
       'Cache-Control': 'max-age=0'
     };
     
-    const proxyUrl = await getProxyUrl();
-    let html = null;
-    
-    // Try proxy first for iframe extraction
-    if (proxyUrl) {
-      try {
-        const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(fullUrl)}`;
-        const proxyResponse = await fetch(proxyFetchUrl, {
-          headers,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        if (proxyResponse.ok) {
-          html = await proxyResponse.text();
-        }
-      } catch (proxyError) {
-        console.log('Proxy failed for iframe extraction:', proxyError.message);
-      }
-    }
-    
-    // Fallback to direct fetch
-    if (!html) {
-      try {
-        const directResponse = await fetch(fullUrl, {
-          headers,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        if (directResponse.status !== 200) {
-          console.error('Failed to fetch page:', directResponse.status);
-          return originalUrl;
-        }
-        
-        html = await directResponse.text();
-      } catch (directError) {
-        console.error('Error extracting iframe:', directError.message);
+    try {
+      const response = await fetch(fullUrl, {
+        headers,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000)
+      });
+      
+      if (response.status !== 200) {
+        console.error('Failed to fetch page:', response.status);
         return originalUrl;
       }
-    }
-    
-    if (!html) {
-      return originalUrl;
-    }
-    
-    // Extract iframe src using regex
-    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-    
-    if (iframeMatch && iframeMatch[1]) {
-      const iframeSrc = iframeMatch[1];
-      console.log(`Extracted iframe: ${iframeSrc}`);
-      return iframeSrc;
-    } else {
-      console.log('No iframe found, using original URL');
+      
+      const html = await response.text();
+      
+      // Extract iframe src using regex
+      const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
+      
+      if (iframeMatch && iframeMatch[1]) {
+        const iframeSrc = iframeMatch[1];
+        console.log(`Extracted iframe: ${iframeSrc}`);
+        return iframeSrc;
+      } else {
+        console.log('No iframe found, using original URL');
+        return originalUrl;
+      }
+      
+    } catch (error) {
+      console.error('Error extracting iframe:', error.message);
       return originalUrl;
     }
     
@@ -353,7 +273,7 @@ function scrapeSeasons($) {
   return seasons;
 }
 
-// NEW FUNCTION: Extract episodes list
+// Extract episodes list
 function scrapeEpisodesList($) {
   const episodes = [];
   
@@ -463,14 +383,14 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
     const episodeUrl = `${baseUrl}/episode/${episodeSlug}/`;
     console.log(`Scraping: ${episodeUrl}`);
     
-    const html = await fetchWithProxy(episodeUrl, baseUrl);
+    const html = await fetchPage(episodeUrl, baseUrl);
     const $ = cheerio.load(html);
     
     const metadata = scrapeEpisodeMetadata($);
     const allServers = await scrapeServers($);
     const filteredServers = filterServers(allServers, serverQuery);
     const seasons = scrapeSeasons($);
-    const episodesList = scrapeEpisodesList($); // NEW: Extract episodes list
+    const episodesList = scrapeEpisodesList($);
     
     const data = {
       baseUrl,
@@ -483,7 +403,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
       cast: scrapeCast($),
       navigation: scrapeNavigation($),
       seasons: seasons,
-      episodes: episodesList, // NEW: Include episodes in response
+      episodes: episodesList,
       servers: filteredServers
     };
     
@@ -496,7 +416,7 @@ async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
         castCount: data.cast.length,
         categoriesCount: data.categories.length,
         seasonsCount: seasons.length,
-        episodesCount: episodesList.length // NEW: Episode count
+        episodesCount: episodesList.length
       }
     };
     
