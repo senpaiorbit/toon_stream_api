@@ -1,130 +1,18 @@
-// api/home.js
+// api/index.js
+const axios = require('axios');
 const cheerio = require('cheerio');
+const fs = require('fs');
+const path = require('path');
 
-// Cache for base URL and proxy URL (5 minutes)
-let baseUrlCache = { url: null, timestamp: 0 };
-let proxyUrlCache = { url: null, timestamp: 0 };
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
-
-// Fetch base URL from GitHub with caching
-async function getBaseUrl() {
-  const now = Date.now();
-  
-  if (baseUrlCache.url && (now - baseUrlCache.timestamp) < CACHE_DURATION) {
-    return baseUrlCache.url;
-  }
-  
+// Helper function to read base URL from file
+function getBaseUrl() {
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
-    if (response.ok) {
-      const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
-      baseUrlCache = { url: baseUrl, timestamp: now };
-      return baseUrl;
-    }
+    const baseUrlPath = path.join(__dirname, '../src/baseurl.txt');
+    const baseUrl = fs.readFileSync(baseUrlPath, 'utf-8').trim();
+    return baseUrl;
   } catch (error) {
-    console.error('Error fetching base URL from GitHub:', error.message);
-  }
-  
-  // Fallback
-  const fallbackUrl = 'https://toonstream.dad';
-  baseUrlCache = { url: fallbackUrl, timestamp: now };
-  return fallbackUrl;
-}
-
-// Fetch proxy URL from GitHub with caching
-async function getProxyUrl() {
-  const now = Date.now();
-  
-  if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
-    return proxyUrlCache.url;
-  }
-  
-  try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
-    if (response.ok) {
-      const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
-      proxyUrlCache = { url: proxyUrl, timestamp: now };
-      return proxyUrl;
-    }
-  } catch (error) {
-    console.error('Error fetching proxy URL from GitHub:', error.message);
-  }
-  
-  proxyUrlCache = { url: null, timestamp: now };
-  return null;
-}
-
-// Fetch with proxy fallback - CLOUDFLARE WORKER RETURNS HTML AS TEXT/PLAIN
-async function fetchWithProxy(targetUrl) {
-  const proxyUrl = await getProxyUrl();
-  const baseUrl = await getBaseUrl();
-  
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'max-age=0',
-    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1',
-    'Referer': baseUrl
-  };
-  
-  // Try proxy first - CONSUME AS TEXT (Cloudflare returns text/plain)
-  if (proxyUrl) {
-    try {
-      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
-      const proxyResponse = await fetch(proxyFetchUrl, {
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(30000)
-      });
-      
-      if (proxyResponse.ok) {
-        const html = await proxyResponse.text();
-        console.log('✓ Proxy fetch successful (HTML as text/plain)');
-        return html;
-      } else {
-        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
-      }
-    } catch (proxyError) {
-      console.log('✗ Proxy fetch failed:', proxyError.message);
-    }
-  }
-  
-  // Fallback to direct fetch
-  try {
-    const directResponse = await fetch(targetUrl, {
-      headers,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(30000)
-    });
-    
-    if (!directResponse.ok) {
-      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
-    }
-    
-    const html = await directResponse.text();
-    console.log('✓ Direct fetch successful');
-    return html;
-  } catch (directError) {
-    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
+    console.error('Error reading baseurl.txt:', error);
+    return null;
   }
 }
 
@@ -268,6 +156,138 @@ function scrapeContent($, sectionId) {
     });
   });
   
+  return content;
+}
+
+// Scrape weekly schedule
+function scrapeSchedule($) {
+  const schedule = {};
+  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+  
+  days.forEach(day => {
+    const daySchedule = [];
+    
+    $(`#${day} .custom-schedule-item`).each((index, element) => {
+      const $elem = $(element);
+      const $time = $elem.find('.schedule-time');
+      const $description = $elem.find('.schedule-description');
+      
+      daySchedule.push({
+        time: $time.text().trim(),
+        show: $description.text().trim()
+      });
+    });
+    
+    schedule[day] = daySchedule;
+  });
+  
+  return schedule;
+}
+
+// Scrape alphabetical navigation
+function scrapeAlphabetNav($) {
+  const alphabet = [];
+  
+  $('.az-lst a').each((index, element) => {
+    const $elem = $(element);
+    alphabet.push({
+      letter: $elem.text().trim(),
+      url: $elem.attr('href') || ''
+    });
+  });
+  
+  return alphabet;
+}
+
+// Main scraper function
+async function scrapeHomePage(baseUrl) {
+  try {
+    const homeUrl = `${baseUrl}/home`;
+    console.log(`Scraping: ${homeUrl}`);
+    
+    const response = await axios.get(homeUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      },
+      timeout: 30000
+    });
+    
+    const $ = cheerio.load(response.data);
+    
+    const data = {
+      baseUrl: baseUrl,
+      scrapedAt: new Date().toISOString(),
+      featured: scrapeFeaturedShows($),
+      latestEpisodes: scrapeLatestEpisodes($),
+      latestSeries: scrapeContent($, 'widget_list_movies_series-2-all'),
+      latestMovies: scrapeContent($, 'widget_list_movies_series-3-all'),
+      schedule: scrapeSchedule($),
+      alphabetNav: scrapeAlphabetNav($)
+    };
+    
+    return {
+      success: true,
+      data: data,
+      stats: {
+        featuredCount: data.featured.length,
+        latestEpisodesCount: data.latestEpisodes.length,
+        latestSeriesCount: data.latestSeries.length,
+        latestMoviesCount: data.latestMovies.length,
+        scheduleCount: Object.keys(data.schedule).length
+      }
+    };
+    
+  } catch (error) {
+    console.error('Scraping error:', error.message);
+    return {
+      success: false,
+      error: error.message,
+      stack: error.stack
+    };
+  }
+}
+
+// Vercel serverless function handler
+module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
+  
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  
+  if (req.method !== 'GET') {
+    return res.status(405).json({ 
+      success: false, 
+      error: 'Method not allowed. Use GET request.' 
+    });
+  }
+  
+  try {
+    const baseUrl = getBaseUrl();
+    
+    if (!baseUrl) {
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Base URL not found. Please check src/baseurl.txt file.' 
+      });
+    }
+    
+    const result = await scrapeHomePage(baseUrl);
+    res.status(result.success ? 200 : 500).json(result);
+    
+  } catch (error) {
+    console.error('Handler error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Internal server error', 
+      message: error.message 
+    });
+  }
+};  
   return content;
 }
 
