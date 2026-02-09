@@ -93,18 +93,6 @@ function normalizeImage(url) {
   return normalized;
 }
 
-function decodeHTML(text) {
-  return text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/&#8217;/g, "'")
-    .replace(/&#8211;/g, '-')
-    .replace(/&#8230;/g, '...');
-}
-
 function extractEpisodeNumber(text) {
   const match = text.match(/(\d+)x(\d+)/);
   if (match) {
@@ -117,29 +105,58 @@ function extractEpisodeNumber(text) {
   return { full: text };
 }
 
+function extractCategories(classList) {
+  const categories = [];
+  const categoryMatches = [...(classList.matchAll(/category-([\w-]+)/g))];
+  categoryMatches.forEach(match => categories.push(match[1]));
+  return categories;
+}
+
+function extractTags(classList) {
+  const tags = [];
+  const tagMatches = [...(classList.matchAll(/tag-([\w-]+)/g))];
+  tagMatches.forEach(match => tags.push(match[1]));
+  return tags;
+}
+
+function extractCast(classList) {
+  const cast = [];
+  const castMatches = [...(classList.matchAll(/cast(?:_tv)?-([\w-]+)/g))];
+  castMatches.forEach(match => cast.push(match[1].replace(/-/g, ' ')));
+  return cast.slice(0, 10);
+}
+
+function extractDirectors(classList) {
+  const directors = [];
+  const directorMatches = [...(classList.matchAll(/directors?(?:-tv)?-([\w-]+)/g))];
+  directorMatches.forEach(match => directors.push(match[1].replace(/-/g, ' ')));
+  return directors;
+}
+
+function extractCountries(classList) {
+  const countries = [];
+  const countryMatches = [...(classList.matchAll(/country-([\w-]+)/g))];
+  countryMatches.forEach(match => countries.push(match[1].replace(/-/g, ' ')));
+  return countries;
+}
+
 function scrapeFeaturedShows(html) {
   const featured = [];
-  const wrapperPattern = /<div[^>]*class="[^"]*gs_logo_single--wrapper[^"]*"[^>]*>[\s\S]*?<\/div>/g;
-  const wrappers = [...html.matchAll(wrapperPattern)];
+  const pattern = /<div[^>]*class="[^"]*gs_logo_single--wrapper[^"]*"[^>]*>(.*?)<\/div>\s*(?=<div[^>]*class="[^"]*gs_logo_single--wrapper|<\/div>)/gs;
+  const matches = [...html.matchAll(pattern)];
   
-  for (const wrapper of wrappers) {
-    const content = wrapper[0];
+  for (const match of matches) {
+    const content = match[1];
+    const imgMatch = content.match(/<img[^>]+src="([^"]+)"[^>]*(?:title|alt)="([^"]+)"/);
+    const linkMatch = content.match(/<a[^>]+href="([^"]+)"/);
+    const srcsetMatch = content.match(/srcset="([^"]+)"/);
     
-    const hrefMatch = content.match(/<a[^>]+href="([^"]+)"/);
-    const imgMatch = content.match(/<img[^>]*>/);
-    
-    if (imgMatch) {
-      const img = imgMatch[0];
-      const srcMatch = img.match(/src="([^"]+)"/);
-      const titleMatch = img.match(/title="([^"]+)"/);
-      const altMatch = img.match(/alt="([^"]+)"/);
-      const srcsetMatch = img.match(/srcset="([^"]+)"/);
-      
+    if (imgMatch || linkMatch) {
       featured.push({
-        title: decodeHTML(titleMatch?.[1] || altMatch?.[1] || ''),
-        image: normalizeImage(srcMatch?.[1]),
-        searchUrl: hrefMatch?.[1] || '',
-        srcset: srcsetMatch?.[1] || null
+        title: imgMatch ? imgMatch[2] : '',
+        image: normalizeImage(imgMatch ? imgMatch[1] : null),
+        searchUrl: linkMatch ? linkMatch[1] : '',
+        srcset: srcsetMatch ? srcsetMatch[1] : null
       });
     }
   }
@@ -149,34 +166,32 @@ function scrapeFeaturedShows(html) {
 
 function scrapeLatestEpisodes(html) {
   const episodes = [];
+  const sectionPattern = /<section[^>]*id="widget_list_episodes-8"[^>]*>[\s\S]*?<ul[^>]*class="post-lst[^"]*"[^>]*>([\s\S]*?)<\/ul>/;
+  const sectionMatch = html.match(sectionPattern);
   
-  const widgetMatch = html.match(/<div[^>]*id="widget_list_episodes-8"[^>]*class="[^"]*widget[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/);
+  if (!sectionMatch) return episodes;
   
-  if (!widgetMatch) return episodes;
-  
-  const widgetContent = widgetMatch[1];
-  const liPattern = /<li[^>]*>([\s\S]*?)<\/li>/g;
-  const items = [...widgetContent.matchAll(liPattern)];
+  const section = sectionMatch[1];
+  const liPattern = /<li[^>]*>\s*<article[^>]*class="[^"]*episodes[^"]*"[^>]*>([\s\S]*?)<\/article>\s*<\/li>/g;
+  const items = [...section.matchAll(liPattern)];
   
   for (const item of items) {
     const content = item[1];
     
-    const linkMatch = content.match(/<a[^>]+class="[^"]*lnk-blk[^"]*"[^>]+href="([^"]+)"/);
-    const imgMatch = content.match(/<img[^>]+src="([^"]+)"[^>]*(?:alt="([^"]*)")?/);
-    const titleMatch = content.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/);
-    const numEpiMatch = content.match(/<span[^>]*class="[^"]*num-epi[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-    const timeMatch = content.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-    
-    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
-    const numEpi = numEpiMatch ? numEpiMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+    const titleMatch = content.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
+    const urlMatch = content.match(/<a[^>]+href="([^"]+)"[^>]*class="lnk-blk"/);
+    const imageMatch = content.match(/<img[^>]+src="([^"]+)"/);
+    const imageAltMatch = content.match(/<img[^>]+alt="([^"]+)"/);
+    const numEpiMatch = content.match(/<span[^>]*class="[^"]*num-epi[^"]*"[^>]*>(.*?)<\/span>/);
+    const timeMatch = content.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>(.*?)<\/span>/);
     
     episodes.push({
-      title: decodeHTML(title),
-      episodeNumber: extractEpisodeNumber(numEpi),
-      image: normalizeImage(imgMatch?.[1]),
-      url: linkMatch?.[1] || '',
+      title: titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '',
+      episodeNumber: numEpiMatch ? extractEpisodeNumber(numEpiMatch[1].trim()) : { full: '' },
+      image: normalizeImage(imageMatch ? imageMatch[1] : null),
+      url: urlMatch ? urlMatch[1] : '',
       timeAgo: timeMatch ? timeMatch[1].trim() : '',
-      imageAlt: imgMatch?.[2] || ''
+      imageAlt: imageAltMatch ? imageAltMatch[1] : ''
     });
   }
   
@@ -185,61 +200,38 @@ function scrapeLatestEpisodes(html) {
 
 function scrapeContent(html, sectionId) {
   const content = [];
-  
-  const sectionPattern = new RegExp(`<div[^>]*id="${sectionId}"[^>]*class="[^"]*widget[^"]*"[^>]*>([\\s\\S]*?)<\\/div>\\s*<\\/div>`, '');
+  const sectionPattern = new RegExp(`<section[^>]*id="${sectionId}"[^>]*>[\\s\\S]*?<div[^>]*id="${sectionId}-all"[^>]*>[\\s\\S]*?<ul[^>]*class="post-lst[^"]*"[^>]*>([\\s\\S]*?)<\/ul>`, 's');
   const sectionMatch = html.match(sectionPattern);
   
   if (!sectionMatch) return content;
   
-  const sectionContent = sectionMatch[1];
-  const liPattern = /<li[^>]*class="([^"]*)"[^>]*(?:id="([^"]*)")?[^>]*>([\s\S]*?)<\/li>/g;
-  const items = [...sectionContent.matchAll(liPattern)];
+  const section = sectionMatch[1];
+  const liPattern = /<li[^>]*id="post-(\d+)"[^>]*class="([^"]*)"[^>]*>\s*<article[^>]*>([\s\S]*?)<\/article>\s*<\/li>/g;
+  const items = [...section.matchAll(liPattern)];
   
   for (const item of items) {
-    const classList = item[1];
-    const postId = item[2] || '';
+    const postId = item[1];
+    const classList = item[2];
     const itemContent = item[3];
     
-    const linkMatch = itemContent.match(/<a[^>]+class="[^"]*lnk-blk[^"]*"[^>]+href="([^"]+)"/);
-    const imgMatch = itemContent.match(/<img[^>]+src="([^"]+)"[^>]*(?:alt="([^"]*)")?/);
-    const titleMatch = itemContent.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/);
-    const voteMatch = itemContent.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-    
-    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
-    const rating = voteMatch ? voteMatch[1].replace('TMDB', '').replace(/<[^>]+>/g, '').trim() : null;
-    
-    const categories = [];
-    const categoryMatches = [...classList.matchAll(/category-([\w-]+)/g)];
-    categoryMatches.forEach(match => categories.push(match[1]));
-    
-    const tags = [];
-    const tagMatches = [...classList.matchAll(/tag-([\w-]+)/g)];
-    tagMatches.forEach(match => tags.push(match[1]));
-    
-    const cast = [];
-    const castMatches = [...classList.matchAll(/cast[_-]([\w-]+)/g)];
-    castMatches.forEach(match => cast.push(match[1].replace(/-/g, ' ')));
-    
-    const directors = [];
-    const directorMatches = [...classList.matchAll(/directors-([\w-]+)/g)];
-    directorMatches.forEach(match => directors.push(match[1].replace(/-/g, ' ')));
-    
-    const countries = [];
-    const countryMatches = [...classList.matchAll(/country-([\w-]+)/g)];
-    countryMatches.forEach(match => countries.push(match[1].replace(/-/g, ' ')));
+    const titleMatch = itemContent.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
+    const urlMatch = itemContent.match(/<a[^>]+href="([^"]+)"[^>]*class="lnk-blk"/);
+    const imageMatch = itemContent.match(/<img[^>]+src="([^"]+)"/);
+    const imageAltMatch = itemContent.match(/<img[^>]+alt="([^"]+)"/);
+    const ratingMatch = itemContent.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>[\s\S]*?<span>TMDB<\/span>\s*([\d.]+)/);
     
     content.push({
-      id: postId,
-      title: decodeHTML(title),
-      image: normalizeImage(imgMatch?.[1]),
-      url: linkMatch?.[1] || '',
-      rating: rating,
-      imageAlt: imgMatch?.[2] || '',
-      categories: categories,
-      tags: tags,
-      cast: cast.slice(0, 10),
-      directors: directors,
-      countries: countries
+      id: `post-${postId}`,
+      title: titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '',
+      image: normalizeImage(imageMatch ? imageMatch[1] : null),
+      url: urlMatch ? urlMatch[1] : '',
+      rating: ratingMatch ? ratingMatch[1].trim() : null,
+      imageAlt: imageAltMatch ? imageAltMatch[1] : '',
+      categories: extractCategories(classList),
+      tags: extractTags(classList),
+      cast: extractCast(classList),
+      directors: extractDirectors(classList),
+      countries: extractCountries(classList)
     });
   }
   
@@ -252,28 +244,19 @@ function scrapeSchedule(html) {
   
   for (const day of days) {
     const daySchedule = [];
-    const dayPattern = new RegExp(`<div[^>]*id="${day}"[^>]*class="[^"]*custom-schedule[^"]*"[^>]*>([\\s\\S]*?)<\\/div>`, '');
+    const dayPattern = new RegExp(`<div[^>]*class="[^"]*custom-tab-pane[^"]*"[^>]*id="${day}"[^>]*>([\\s\\S]*?)<\\/div>\\s*(?=<div[^>]*class="[^"]*custom-tab-pane|<\\/div>\\s*<\\/div>)`, 's');
     const dayMatch = html.match(dayPattern);
     
     if (dayMatch) {
       const dayContent = dayMatch[1];
-      const itemPattern = /<div[^>]*class="[^"]*custom-schedule-item[^"]*"[^>]*>([\s\S]*?)<\/div>/g;
+      const itemPattern = /<li[^>]*class="[^"]*custom-schedule-item[^"]*"[^>]*>[\s\S]*?<span[^>]*class="[^"]*schedule-time[^"]*"[^>]*>(.*?)<\/span>[\s\S]*?<p[^>]*class="[^"]*schedule-description[^"]*"[^>]*>(.*?)<\/p>/g;
       const items = [...dayContent.matchAll(itemPattern)];
       
       for (const item of items) {
-        const content = item[1];
-        const timeMatch = content.match(/<span[^>]*class="[^"]*schedule-time[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-        const showMatch = content.match(/<span[^>]*class="[^"]*schedule-description[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-        
-        const time = timeMatch ? timeMatch[1].replace(/<[^>]+>/g, '').trim() : '';
-        const show = showMatch ? showMatch[1].replace(/<[^>]+>/g, '').trim() : '';
-        
-        if (time || show) {
-          daySchedule.push({
-            time: time,
-            show: decodeHTML(show)
-          });
-        }
+        daySchedule.push({
+          time: item[1].trim(),
+          show: item[2].trim()
+        });
       }
     }
     
@@ -285,23 +268,20 @@ function scrapeSchedule(html) {
 
 function scrapeAlphabetNav(html) {
   const alphabet = [];
-  const navPattern = /<div[^>]*class="[^"]*az-lst[^"]*"[^>]*>([\s\S]*?)<\/div>/;
-  const navMatch = html.match(navPattern);
+  const pattern = /<section[^>]*id="wdgt_letter-5"[^>]*>[\s\S]*?<ul[^>]*class="az-lst[^"]*"[^>]*>([\s\S]*?)<\/ul>/;
+  const match = html.match(pattern);
   
-  if (!navMatch) return alphabet;
+  if (!match) return alphabet;
   
-  const navContent = navMatch[1];
-  const linkPattern = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  const links = [...navContent.matchAll(linkPattern)];
+  const content = match[1];
+  const linkPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+  const links = [...content.matchAll(linkPattern)];
   
   for (const link of links) {
-    const letter = link[2].replace(/<[^>]+>/g, '').trim();
-    if (letter) {
-      alphabet.push({
-        letter: letter,
-        url: link[1]
-      });
-    }
+    alphabet.push({
+      letter: link[2].trim(),
+      url: link[1]
+    });
   }
   
   return alphabet;
@@ -316,8 +296,8 @@ async function scrapeHomePage(baseUrl) {
     scrapedAt: new Date().toISOString(),
     featured: scrapeFeaturedShows(html),
     latestEpisodes: scrapeLatestEpisodes(html),
-    latestSeries: scrapeContent(html, 'widget_list_movies_series-2-all'),
-    latestMovies: scrapeContent(html, 'widget_list_movies_series-3-all'),
+    latestSeries: scrapeContent(html, 'widget_list_movies_series-2'),
+    latestMovies: scrapeContent(html, 'widget_list_movies_series-3'),
     schedule: scrapeSchedule(html),
     alphabetNav: scrapeAlphabetNav(html)
   };
