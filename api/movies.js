@@ -184,6 +184,7 @@ function scrapeVideoOptions(html, apiUrl) {
   const servers = [];
   const iframes = [];
 
+  // Extract language tabs
   const langTabPattern = /<span[^>]+tab="(ln\d+)"[^>]*class="[^"]*btn([^"]*)"[^>]*>(.*?)<\/span>/g;
   const langMatches = [...html.matchAll(langTabPattern)];
   langMatches.forEach(m => {
@@ -194,7 +195,8 @@ function scrapeVideoOptions(html, apiUrl) {
     });
   });
 
-  const serverSectionPattern = /<div[^>]+id="(ln\d+)"[^>]*class="[^"]*lrt([^"]*)"[^>]*>([\s\S]*?)<\/div>/g;
+  // Extract server sections for each language
+  const serverSectionPattern = /<div[^>]+id="(ln\d+)"[^>]*class="[^"]*lrt([^"]*)"[^>]*>([\s\S]*?)<\/div>\s*(?=<div[^>]+id="ln\d+"|<\/div>)/g;
   const serverSections = [...html.matchAll(serverSectionPattern)];
   
   serverSections.forEach(section => {
@@ -202,14 +204,26 @@ function scrapeVideoOptions(html, apiUrl) {
     const isActive = section[2].includes('active');
     const content = section[3];
     
-    const serverPattern = /<a[^>]+class="[^"]*btn([^"]*)"[^>]+href="#(options-\d+)"[^>]*>[\s\S]*?<span>(\d+)<\/span>[\s\S]*?<span[^>]*class="[^"]*server[^"]*"[^>]*>(.*?)<\/span>/g;
+    // Fixed regex pattern to correctly extract server information
+    // Pattern breakdown:
+    // - Finds <a> tags with class containing "btn"
+    // - Extracts the href target (#options-X)
+    // - Captures server number from <span>
+    // - Captures server name from <span class="server">
+    const serverPattern = /<a[^>]+class="[^"]*btn([^"]*)"[^>]+href="#(options-\d+)"[^>]*>[\s\S]*?Sever\s*<span>(\d+)<\/span>[\s\S]*?<span[^>]*class="[^"]*server[^"]*"[^>]*>([\s\S]*?)<\/span>/g;
     const serverMatches = [...content.matchAll(serverPattern)];
     
     const langServers = [];
     serverMatches.forEach(s => {
+      // Clean server name by removing language suffixes
+      const serverName = s[4]
+        .replace(/-Hindi-Eng-Jap/g, '')
+        .replace(/-Hindi-Eng/g, '')
+        .trim();
+      
       langServers.push({
         serverNumber: s[3].trim(),
-        serverName: s[4].replace(/-Hindi-Eng-Jap|-Hindi-Eng/g, '').trim(),
+        serverName: serverName,
         targetId: s[2],
         active: s[1].includes('on')
       });
@@ -222,6 +236,7 @@ function scrapeVideoOptions(html, apiUrl) {
     });
   });
 
+  // Extract iframes
   const iframePattern = /<div[^>]+id="(options-\d+)"[^>]*class="[^"]*video[^"]*([^"]*)"[^>]*>[\s\S]*?<iframe[^>]+(?:src|data-src)="([^"]+)"/g;
   const iframeMatches = [...html.matchAll(iframePattern)];
   
