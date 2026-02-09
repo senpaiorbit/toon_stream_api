@@ -2,31 +2,45 @@ export const config = {
   runtime: "edge",
 };
 
+// ---- Helper: normalize broken HTML entities in URLs
+function normalizeUrl(input) {
+  return input
+    .replace(/&#038;|&amp;/gi, "&")
+    .replace(/&#x3D;|&#61;/gi, "=");
+}
+
 export default async function handler(req) {
   try {
     const { searchParams } = new URL(req.url);
 
-    // ---- Params
-    const baseUrl = searchParams.get("url");
-    const trid = searchParams.get("trid");
-    const trtype = searchParams.get("trtype");
+    const rawUrl = searchParams.get("url");
     const wantJson = searchParams.get("json") === "1";
 
-    if (!baseUrl) {
+    if (!rawUrl) {
       return new Response(
         JSON.stringify({ error: "url parameter is required" }),
         { status: 400, headers: { "content-type": "application/json" } }
       );
     }
 
-    // ---- Rebuild full URL
-    const urlObj = new URL(baseUrl);
+    // ---- Decode + normalize broken encoding
+    const decodedUrl = normalizeUrl(decodeURIComponent(rawUrl));
+
+    // ---- Parse cleaned URL
+    const urlObj = new URL(decodedUrl);
+
+    // ---- Extract params if embedded
+    const trid =
+      searchParams.get("trid") || urlObj.searchParams.get("trid");
+    const trtype =
+      searchParams.get("trtype") || urlObj.searchParams.get("trtype");
+
     if (trid) urlObj.searchParams.set("trid", trid);
     if (trtype) urlObj.searchParams.set("trtype", trtype);
 
     const fullUrl = urlObj.toString();
 
-    // ---- Fetch target page
+    // ---- Fetch page
     const res = await fetch(fullUrl, {
       headers: {
         "user-agent": "Mozilla/5.0 (compatible; EdgeScraper/1.0)",
@@ -34,29 +48,29 @@ export default async function handler(req) {
     });
 
     if (!res.ok) {
-      // Hard fallback → original URL
       return Response.redirect(fullUrl, 302);
     }
 
     const html = await res.text();
 
-    // ---- Extract iframe src (EDGE SAFE)
+    // ---- Extract iframe src (edge safe)
     let iframeSrc = null;
     const match = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
     if (match) iframeSrc = match[1];
 
-    // ---- JSON MODE (instant data)
+    // ---- JSON MODE
     if (wantJson) {
       return new Response(
         JSON.stringify(
           {
             parsed: {
-              base_url: baseUrl,
+              original_url: rawUrl,
+              cleaned_url: decodedUrl,
               trid,
               trtype,
             },
-            full_url: fullUrl,
-            resolved: {
+            resolved_url: fullUrl,
+            result: {
               iframe_src: iframeSrc,
               redirect_target: iframeSrc || fullUrl,
             },
@@ -70,12 +84,12 @@ export default async function handler(req) {
       );
     }
 
-    // ---- REDIRECT MODE (default)
+    // ---- Redirect MODE
     if (iframeSrc) {
       return Response.redirect(iframeSrc, 302);
     }
 
-    // ---- Final fallback → original URL
+    // ---- Fallback
     return Response.redirect(fullUrl, 302);
 
   } catch (err) {
