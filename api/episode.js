@@ -250,15 +250,8 @@ function scrapeEpisodes(html) {
 
 function scrapeServers(html, apiUrl) {
   const servers = [];
-  const serverPattern = /<ul[^>]*class="[^"]*aa-tbs aa-tbs-video[^"]*"[^>]*>(.*?)<\/ul>/s;
-  const serverMatch = html.match(serverPattern);
   
-  if (!serverMatch) return servers;
-  
-  const serversSection = serverMatch[1];
-  const liPattern = /<li[^>]*>\s*<a[^>]+class="[^"]*btn([^"]*)"[^>]+href="#options-(\d+)"[^>]*>[\s\S]*?<span>(\d+)<\/span>[\s\S]*?<span[^>]*class="[^"]*server[^"]*"[^>]*>(.*?)<\/span>/g;
-  const items = [...serversSection.matchAll(liPattern)];
-  
+  // First, extract all iframes to create a mapping
   const iframePattern = /<div[^>]*id="options-(\d+)"[^>]*>[\s\S]*?<iframe[^>]+(?:src|data-src)="([^"]+)"/g;
   const iframes = [...html.matchAll(iframePattern)];
   const iframeMap = {};
@@ -266,24 +259,51 @@ function scrapeServers(html, apiUrl) {
     iframeMap[iframe[1]] = iframe[2];
   });
   
+  // Extract server list section
+  const serverPattern = /<ul[^>]*class="[^"]*aa-tbs aa-tbs-video[^"]*"[^>]*>(.*?)<\/ul>/s;
+  const serverMatch = html.match(serverPattern);
+  
+  if (!serverMatch) return servers;
+  
+  const serversSection = serverMatch[1];
+  
+  // Fixed regex pattern to match the actual HTML structure
+  // Pattern breakdown:
+  // - Finds <a> tags with class containing "btn"
+  // - Extracts href="#options-X"
+  // - Captures server number from "Sever <span>X</span>"
+  // - Captures server name from <span class="server">
+  const liPattern = /<li[^>]*>\s*<a[^>]+class="[^"]*btn([^"]*)"[^>]+href="#(options-\d+)"[^>]*>[\s\S]*?Sever\s*<span>(\d+)<\/span>[\s\S]*?<span[^>]*class="[^"]*server[^"]*"[^>]*>([\s\S]*?)<\/span>/g;
+  const items = [...serversSection.matchAll(liPattern)];
+  
   for (const item of items) {
     const isActive = item[1].includes('on');
-    const serverNumber = parseInt(item[2]);
-    const displayNumber = parseInt(item[3]);
-    const serverText = item[4].trim();
+    const targetId = item[2]; // e.g., "options-0"
+    const displayNumber = parseInt(item[3]); // The number shown to user (1, 2, 3...)
+    const serverText = item[4].trim(); // Full server text with language suffix
     
-    const serverNameMatch = serverText.match(/^([\w\/]+)/);
-    const serverName = serverNameMatch ? serverNameMatch[1].trim() : 'Unknown';
+    // Extract server number from targetId (options-0 -> 0)
+    const serverNumberMatch = targetId.match(/options-(\d+)/);
+    const serverNumber = serverNumberMatch ? parseInt(serverNumberMatch[1]) : 0;
     
-    const originalSrc = iframeMap[serverNumber] || '';
+    // Clean server name by removing language suffixes
+    const serverName = serverText
+      .replace(/-Multi Audio/g, '')
+      .replace(/-Hindi-Eng-Jap/g, '')
+      .replace(/-Hindi-Eng/g, '')
+      .trim();
+    
+    // Get the iframe source from the mapping
+    const originalSrc = iframeMap[serverNumber.toString()] || '';
     
     servers.push({
       serverNumber: serverNumber,
-      originalSrc: originalSrc,
-      src: `${apiUrl}/api/embed?url=${encodeURIComponent(originalSrc)}`,
-      isActive: isActive,
+      displayNumber: displayNumber,
       name: serverName,
-      displayNumber: displayNumber
+      targetId: targetId,
+      isActive: isActive,
+      originalSrc: originalSrc,
+      src: `${apiUrl}/api/embed?url=${encodeURIComponent(originalSrc)}`
     });
   }
   
