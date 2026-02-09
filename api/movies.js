@@ -1,606 +1,392 @@
+// /api/movies.js
 
-// api/movies.js
-const cheerio = require('cheerio');
+export const config = { runtime: "edge" };
 
-// Cache for base URL and proxy URL (5 minutes)
 let baseUrlCache = { url: null, timestamp: 0 };
 let proxyUrlCache = { url: null, timestamp: 0 };
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
 
-// Fetch base URL from GitHub with caching
 async function getBaseUrl() {
   const now = Date.now();
-  
   if (baseUrlCache.url && (now - baseUrlCache.timestamp) < CACHE_DURATION) {
     return baseUrlCache.url;
   }
-  
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt');
     if (response.ok) {
       const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
       baseUrlCache = { url: baseUrl, timestamp: now };
       return baseUrl;
     }
   } catch (error) {
-    console.error('Error fetching base URL from GitHub:', error.message);
+    console.error('Error fetching base URL:', error.message);
   }
-  
-  // Fallback
   const fallbackUrl = 'https://toonstream.dad';
   baseUrlCache = { url: fallbackUrl, timestamp: now };
   return fallbackUrl;
 }
 
-// Fetch proxy URL from GitHub with caching
 async function getProxyUrl() {
   const now = Date.now();
-  
   if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
     return proxyUrlCache.url;
   }
-  
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt');
     if (response.ok) {
       const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
       proxyUrlCache = { url: proxyUrl, timestamp: now };
       return proxyUrl;
     }
   } catch (error) {
-    console.error('Error fetching proxy URL from GitHub:', error.message);
+    console.error('Error fetching proxy URL:', error.message);
   }
-  
   proxyUrlCache = { url: null, timestamp: now };
   return null;
 }
 
-// Fetch with proxy fallback
-async function fetchWithProxy(targetUrl, refererUrl = null) {
+async function fetchWithProxy(targetUrl) {
   const proxyUrl = await getProxyUrl();
-  
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'max-age=0',
-    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1'
-  };
-  
-  if (refererUrl) {
-    headers['Referer'] = refererUrl;
-  }
-  
-  // Try proxy first
   if (proxyUrl) {
     try {
       const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
-      const proxyResponse = await fetch(proxyFetchUrl, {
-        headers,
-        redirect: 'follow',
-        signal: AbortSignal.timeout(30000)
-      });
-      
-      if (proxyResponse.ok) {
-        console.log('✓ Proxy fetch successful');
-        return await proxyResponse.text();
-      } else {
-        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
-      }
+      const proxyResponse = await fetch(proxyFetchUrl, { signal: AbortSignal.timeout(30000) });
+      if (proxyResponse.ok) return await proxyResponse.text();
     } catch (proxyError) {
-      console.log('✗ Proxy fetch failed:', proxyError.message);
+      console.log('Proxy fetch failed:', proxyError.message);
     }
   }
-  
-  // Fallback to direct fetch
-  try {
-    const baseUrl = await getBaseUrl();
-    if (!refererUrl) {
-      headers['Referer'] = baseUrl;
-    }
-    
-    const directResponse = await fetch(targetUrl, {
-      headers,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(30000)
-    });
-    
-    if (!directResponse.ok) {
-      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
-    }
-    
-    console.log('✓ Direct fetch successful');
-    return await directResponse.text();
-  } catch (directError) {
-    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
+  const directResponse = await fetch(targetUrl, { signal: AbortSignal.timeout(30000) });
+  if (!directResponse.ok) {
+    throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
   }
+  return await directResponse.text();
 }
 
-function extractImageUrl(imgSrc) {
-  if (!imgSrc) return null;
-  if (imgSrc.startsWith('//')) {
-    return 'https:' + imgSrc;
-  }
-  return imgSrc;
+function normalizeImage(url) {
+  if (!url) return null;
+  let normalized = url.startsWith('//') ? 'https:' + url : url;
+  normalized = normalized.replace(/\/w\d+\//g, '/w500/');
+  return normalized;
 }
 
-// Extract iframe from HTML (embedded logic with better error handling)
-async function extractIframeFromUrl(originalUrl) {
-  try {
-    console.log(`Extracting iframe from: ${originalUrl}`);
-    
-    const urlObj = new URL(originalUrl);
-    const fullUrl = urlObj.toString();
-    
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-      'Sec-Ch-Ua-Mobile': '?0',
-      'Sec-Ch-Ua-Platform': '"Windows"',
-      'Sec-Fetch-Dest': 'iframe',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'cross-site',
-      'Upgrade-Insecure-Requests': '1',
-      'Cache-Control': 'max-age=0'
-    };
-    
-    const proxyUrl = await getProxyUrl();
-    let html = null;
-    
-    // Try proxy first for iframe extraction
-    if (proxyUrl) {
-      try {
-        const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(fullUrl)}`;
-        const proxyResponse = await fetch(proxyFetchUrl, {
-          headers,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        if (proxyResponse.ok) {
-          html = await proxyResponse.text();
-        }
-      } catch (proxyError) {
-        console.log('Proxy failed for iframe extraction:', proxyError.message);
-      }
-    }
-    
-    // Fallback to direct fetch
-    if (!html) {
-      try {
-        const directResponse = await fetch(fullUrl, {
-          headers,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        if (directResponse.status === 403 || directResponse.status === 404 || directResponse.status >= 400) {
-          console.log(`Got status ${directResponse.status}, using original URL as fallback`);
-          return originalUrl;
-        }
-        
-        if (directResponse.ok) {
-          html = await directResponse.text();
-        }
-      } catch (directError) {
-        console.error('Error extracting iframe:', directError.message);
-        return originalUrl;
-      }
-    }
-    
-    if (!html) {
-      return originalUrl;
-    }
-    
-    // Extract iframe src using regex
-    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-    
-    if (iframeMatch && iframeMatch[1]) {
-      const iframeSrc = iframeMatch[1];
-      console.log(`Extracted iframe: ${iframeSrc}`);
-      return iframeSrc;
-    } else {
-      console.log('No iframe found, using original URL');
-      return originalUrl;
-    }
-    
-  } catch (error) {
-    console.error('Error extracting iframe:', error.message);
-    return originalUrl;
-  }
+function extractPostId(html) {
+  const match = html.match(/postid-(\d+)/);
+  return match ? match[1] : null;
 }
 
-// Scrape movie details
-function scrapeMovieDetails($) {
-  const movie = {};
-  
-  // Basic info
-  movie.title = $('.entry-title').first().text().trim();
-  movie.posterImage = extractImageUrl($('.post-thumbnail img').attr('src'));
-  movie.posterAlt = $('.post-thumbnail img').attr('alt') || '';
-  
-  // Backdrop images
-  movie.backdrop = {
-    header: extractImageUrl($('.bghd .TPostBg').attr('src')) || null,
-    footer: extractImageUrl($('.bgft .TPostBg').attr('src')) || null
+function scrapeMovieDetails(html) {
+  const details = {
+    title: '',
+    posterImage: null,
+    posterAlt: '',
+    backdrop: { header: null, footer: null },
+    genres: [],
+    tags: [],
+    duration: '',
+    year: '',
+    description: '',
+    additionalInfo: [],
+    language: '',
+    quality: '',
+    runningTime: '',
+    directors: [],
+    cast: [],
+    rating: '',
+    ratingSource: 'TMDB'
   };
-  
-  // Genres
-  movie.genres = [];
-  $('.entry-meta .genres a').each((index, element) => {
-    movie.genres.push({
-      name: $(element).text().trim(),
-      url: $(element).attr('href') || ''
-    });
-  });
-  
-  // Tags
-  movie.tags = [];
-  $('.entry-meta .tag a').each((index, element) => {
-    movie.tags.push({
-      name: $(element).text().trim(),
-      url: $(element).attr('href') || ''
-    });
-  });
-  
-  // Duration
-  const durationText = $('.entry-meta .duration').text().trim();
-  movie.duration = durationText;
-  
-  // Year
-  const yearText = $('.entry-meta .year').text().trim();
-  movie.year = yearText;
-  
-  // Description
-  const descriptionParagraphs = [];
-  $('.description p').each((index, element) => {
-    const text = $(element).text().trim();
-    if (text) {
-      descriptionParagraphs.push(text);
-    }
-  });
-  movie.description = descriptionParagraphs[0] || '';
-  movie.additionalInfo = descriptionParagraphs.slice(1);
-  
-  // Extract language, quality, running time from description
-  movie.language = null;
-  movie.quality = null;
-  movie.runningTime = null;
-  
-  descriptionParagraphs.forEach(para => {
-    if (para.includes('Language:')) {
-      movie.language = para.replace(/Language:/gi, '').trim();
-    }
-    if (para.includes('Quality:')) {
-      movie.quality = para.replace(/Quality:/gi, '').trim();
-    }
-    if (para.includes('Running time:')) {
-      movie.runningTime = para.replace(/Running time:/gi, '').trim();
-    }
-  });
-  
-  // Directors
-  movie.directors = [];
-  $('.cast-lst li').each((index, element) => {
-    const $elem = $(element);
-    const label = $elem.find('span').text().trim();
-    
-    if (label === 'Director') {
-      $elem.find('p a').each((i, directorLink) => {
-        movie.directors.push({
-          name: $(directorLink).text().trim(),
-          url: $(directorLink).attr('href') || ''
-        });
-      });
-    }
-  });
-  
-  // Cast
-  movie.cast = [];
-  $('.cast-lst li').each((index, element) => {
-    const $elem = $(element);
-    const label = $elem.find('span').text().trim();
-    
-    if (label === 'Cast') {
-      $elem.find('p a').each((i, castLink) => {
-        movie.cast.push({
-          name: $(castLink).text().trim(),
-          url: $(castLink).attr('href') || ''
-        });
-      });
-    }
-  });
-  
-  // Rating
-  const ratingText = $('.vote-cn .vote .num').text().trim();
-  movie.rating = ratingText || null;
-  movie.ratingSource = $('.vote-cn .vote span').last().text().trim() || 'TMDB';
-  
-  return movie;
-}
 
-// Scrape video/streaming options
-async function scrapeVideoOptions($) {
-  const videoOptions = {
-    languages: [],
-    servers: []
-  };
-  
-  // Language tabs
-  $('.d-flex-ch.mb-10.btr .btn, .d-flex-ch.mb-10.btr span').each((index, element) => {
-    const $elem = $(element);
-    const language = $elem.text().trim();
-    const tabId = $elem.attr('tab');
-    const isActive = $elem.hasClass('active');
+  const titleMatch = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h1>/);
+  if (titleMatch) details.title = titleMatch[1].trim();
+
+  const posterMatch = html.match(/<div[^>]*class="[^"]*post-thumbnail[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"[^>]*alt="([^"]*)"/);
+  if (posterMatch) {
+    details.posterImage = normalizeImage(posterMatch[1]);
+    details.posterAlt = posterMatch[2];
+  }
+
+  const backdropHeaderMatch = html.match(/<div[^>]*class="[^"]*bghd[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"/);
+  if (backdropHeaderMatch) details.backdrop.header = normalizeImage(backdropHeaderMatch[1]);
+
+  const backdropFooterMatch = html.match(/<div[^>]*class="[^"]*bgft[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"/);
+  if (backdropFooterMatch) details.backdrop.footer = normalizeImage(backdropFooterMatch[1]);
+
+  const genresMatch = html.match(/<span[^>]*class="[^"]*genres[^"]*"[^>]*>(.*?)<\/span>/s);
+  if (genresMatch) {
+    const genrePattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+    const genreMatches = [...genresMatch[1].matchAll(genrePattern)];
+    genreMatches.forEach(m => details.genres.push({ name: m[2].trim(), url: m[1] }));
+  }
+
+  const tagsMatch = html.match(/<span[^>]*class="[^"]*tag[^"]*"[^>]*>(.*?)<\/span>/s);
+  if (tagsMatch) {
+    const tagPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+    const tagMatches = [...tagsMatch[1].matchAll(tagPattern)];
+    tagMatches.forEach(m => details.tags.push({ name: m[2].trim(), url: m[1] }));
+  }
+
+  const durationMatch = html.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>(.*?)<\/span>/);
+  if (durationMatch) details.duration = durationMatch[1].replace(/<[^>]+>/g, '').trim();
+
+  const yearMatch = html.match(/<span[^>]*class="[^"]*year[^"]*"[^>]*>(\d{4})<\/span>/);
+  if (yearMatch) details.year = yearMatch[1];
+
+  const descMatch = html.match(/<div[^>]*class="[^"]*description[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+  if (descMatch) {
+    const descHtml = descMatch[1];
+    const pPattern = /<p[^>]*>(.*?)<\/p>/gs;
+    const paragraphs = [...descHtml.matchAll(pPattern)];
     
-    if (language) {
-      videoOptions.languages.push({
-        language: language,
-        tabId: tabId,
-        active: isActive
-      });
-    }
-  });
-  
-  // Server options
-  $('.lrt').each((langIndex, langElement) => {
-    const $langElem = $(langElement);
-    const langId = $langElem.attr('id');
-    const isActive = $langElem.hasClass('active');
-    
-    const servers = [];
-    $langElem.find('.aa-tbs-video li').each((serverIndex, serverElement) => {
-      const $serverLink = $(serverElement).find('a');
-      const serverNumber = $serverLink.find('span').first().text().trim();
-      const serverName = $serverLink.find('.server').text()
-        .replace('-Hindi-Eng-Jap', '')
-        .replace('-Multi Audio', '')
-        .replace('Multi Audio', '')
-        .trim();
-      const targetId = $serverLink.attr('href')?.replace('#', '') || '';
-      const isServerActive = $serverLink.hasClass('on');
+    paragraphs.forEach(p => {
+      const text = p[1].replace(/<[^>]+>/g, '').trim();
+      if (text && !text.startsWith('Language:') && !text.startsWith('Quality:') && !text.startsWith('Running time:')) {
+        if (!details.description) details.description = text;
+      }
       
-      servers.push({
-        serverNumber: serverNumber,
-        serverName: serverName,
-        targetId: targetId,
-        active: isServerActive
+      if (text.startsWith('Language:')) {
+        details.language = text.replace('Language:', '').trim();
+        details.additionalInfo.push(text);
+      } else if (text.startsWith('Quality:')) {
+        details.quality = text.replace('Quality:', '').trim();
+        details.additionalInfo.push(text);
+      } else if (text.startsWith('Running time:')) {
+        details.runningTime = text.replace('Running time:', '').trim();
+        details.additionalInfo.push(text);
+      }
+    });
+  }
+
+  const castListMatch = html.match(/<ul[^>]*class="[^"]*cast-lst[^"]*"[^>]*>([\s\S]*?)<\/ul>/);
+  if (castListMatch) {
+    const directorMatch = castListMatch[1].match(/<li[^>]*>[\s\S]*?<span>Director<\/span>[\s\S]*?<p[^>]*>(.*?)<\/p>/s);
+    if (directorMatch) {
+      const dirPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+      const dirs = [...directorMatch[1].matchAll(dirPattern)];
+      dirs.forEach(d => details.directors.push({ name: d[2].trim(), url: d[1] }));
+    }
+
+    const castMatch = castListMatch[1].match(/<li[^>]*>[\s\S]*?<span>Cast<\/span>[\s\S]*?<p[^>]*>(.*?)<\/p>/s);
+    if (castMatch) {
+      const castPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+      const casts = [...castMatch[1].matchAll(castPattern)];
+      casts.forEach(c => details.cast.push({ name: c[2].trim(), url: c[1] }));
+    }
+  }
+
+  const ratingMatch = html.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>[\s\S]*?<span[^>]*class="[^"]*num[^"]*"[^>]*>([\d.]+)<\/span>/);
+  if (ratingMatch) details.rating = ratingMatch[1];
+
+  return details;
+}
+
+function scrapeVideoOptions(html, apiUrl) {
+  const languages = [];
+  const servers = [];
+  const iframes = [];
+
+  const langTabPattern = /<span[^>]+tab="(ln\d+)"[^>]*class="[^"]*btn([^"]*)"[^>]*>(.*?)<\/span>/g;
+  const langMatches = [...html.matchAll(langTabPattern)];
+  langMatches.forEach(m => {
+    languages.push({
+      language: m[3].trim(),
+      tabId: m[1],
+      active: m[2].includes('active')
+    });
+  });
+
+  const serverSectionPattern = /<div[^>]+id="(ln\d+)"[^>]*class="[^"]*lrt([^"]*)"[^>]*>([\s\S]*?)<\/div>/g;
+  const serverSections = [...html.matchAll(serverSectionPattern)];
+  
+  serverSections.forEach(section => {
+    const languageId = section[1];
+    const isActive = section[2].includes('active');
+    const content = section[3];
+    
+    const serverPattern = /<a[^>]+class="[^"]*btn([^"]*)"[^>]+href="#(options-\d+)"[^>]*>[\s\S]*?<span>(\d+)<\/span>[\s\S]*?<span[^>]*class="[^"]*server[^"]*"[^>]*>(.*?)<\/span>/g;
+    const serverMatches = [...content.matchAll(serverPattern)];
+    
+    const langServers = [];
+    serverMatches.forEach(s => {
+      langServers.push({
+        serverNumber: s[3].trim(),
+        serverName: s[4].replace(/-Hindi-Eng-Jap|-Hindi-Eng/g, '').trim(),
+        targetId: s[2],
+        active: s[1].includes('on')
       });
     });
     
-    videoOptions.servers.push({
-      languageId: langId,
+    servers.push({
+      languageId,
       active: isActive,
-      servers: servers
+      servers: langServers
     });
   });
+
+  const iframePattern = /<div[^>]+id="(options-\d+)"[^>]*class="[^"]*video[^"]*([^"]*)"[^>]*>[\s\S]*?<iframe[^>]+(?:src|data-src)="([^"]+)"/g;
+  const iframeMatches = [...html.matchAll(iframePattern)];
   
-  // Video iframes - extract original URLs first
-  const iframes = [];
-  $('.video-player .video').each((index, element) => {
-    const $elem = $(element);
-    const optionId = $elem.attr('id');
-    const isActive = $elem.hasClass('on');
-    const $iframe = $elem.find('iframe');
-    const originalSrc = $iframe.attr('src') || $iframe.attr('data-src') || '';
-    
+  iframeMatches.forEach(iframe => {
     iframes.push({
-      optionId: optionId,
-      active: isActive,
-      originalSrc: originalSrc,
-      src: originalSrc
+      optionId: iframe[1],
+      active: iframe[2].includes('on'),
+      originalSrc: iframe[3],
+      src: `${apiUrl}/api/embed?url=${encodeURIComponent(iframe[3])}`
     });
   });
-  
-  // Process all iframes to extract real URLs
-  console.log(`Processing ${iframes.length} video iframes...`);
-  for (let i = 0; i < iframes.length; i++) {
-    if (iframes[i].originalSrc) {
-      const extractedUrl = await extractIframeFromUrl(iframes[i].originalSrc);
-      iframes[i].src = extractedUrl;
-    }
-  }
-  
-  videoOptions.iframes = iframes;
-  
-  return videoOptions;
+
+  return { languages, servers, iframes };
 }
 
-// Scrape comments
-function scrapeComments($) {
+function scrapeComments(html) {
   const comments = [];
+  const commentPattern = /<li[^>]+id="(comment-\d+)"[^>]*>[\s\S]*?<article[^>]*>([\s\S]*?)<\/article>/g;
+  const matches = [...html.matchAll(commentPattern)];
   
-  $('.comment-list .comment').each((index, element) => {
-    const $elem = $(element);
-    const commentId = $elem.attr('id');
+  for (const match of matches) {
+    const commentId = match[1];
+    const content = match[2];
     
-    const author = $elem.find('.comment-author .fn').text().trim();
-    const avatar = $elem.find('.comment-author img').attr('src') || '';
-    const date = $elem.find('.comment-metadata time').attr('datetime') || '';
-    const dateText = $elem.find('.comment-metadata time').text().trim();
-    const content = $elem.find('.comment-content p').text().trim();
-    const commentUrl = $elem.find('.comment-metadata a').attr('href') || '';
+    const authorMatch = content.match(/<b[^>]*class="[^"]*fn[^"]*"[^>]*>(.*?)<\/b>/);
+    const avatarMatch = content.match(/<img[^>]+src='([^']+)'/);
+    const dateMatch = content.match(/<time[^>]+datetime="([^"]+)"[^>]*>(.*?)<\/time>/);
+    const commentMatch = content.match(/<div[^>]*class="[^"]*comment-content[^"]*"[^>]*>[\s\S]*?<p[^>]*>(.*?)<\/p>/);
+    const urlMatch = content.match(/<a[^>]+href="([^"#]+#comment-\d+)"/);
     
     comments.push({
       id: commentId,
-      author: author,
-      avatar: avatar,
-      date: date,
-      dateText: dateText,
-      content: content,
-      url: commentUrl
+      author: authorMatch ? authorMatch[1].trim() : '',
+      avatar: avatarMatch ? avatarMatch[1] : '',
+      date: dateMatch ? dateMatch[1] : '',
+      dateText: dateMatch ? dateMatch[2].trim() : '',
+      content: commentMatch ? commentMatch[1].trim() : '',
+      url: urlMatch ? urlMatch[1] : ''
     });
-  });
+  }
   
   return comments;
 }
 
-// Scrape related movies
-function scrapeRelatedMovies($) {
-  const relatedMovies = [];
+function scrapeRelatedMovies(html) {
+  const movies = [];
+  const relatedPattern = /<section[^>]*class="[^"]*section episodes[^"]*"[^>]*>[\s\S]*?<h3[^>]*>Related movies<\/h3>[\s\S]*?<div[^>]*class="[^"]*owl-carousel[^"]*"[^>]*>([\s\S]*?)<\/div>/;
+  const relatedMatch = html.match(relatedPattern);
   
-  $('.section.episodes .carousel article').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
+  if (!relatedMatch) return movies;
+  
+  const articlePattern = /<article[^>]*class="[^"]*post dfx fcl movies[^"]*"[^>]*>([\s\S]*?)<\/article>/g;
+  const articles = [...relatedMatch[1].matchAll(articlePattern)];
+  
+  for (const article of articles) {
+    const content = article[1];
     
-    relatedMovies.push({
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null
+    const titleMatch = content.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
+    const imageMatch = content.match(/<img[^>]+src="([^"]+)"[^>]*alt="([^"]*)"/);
+    const urlMatch = content.match(/<a[^>]+href="([^"]+)"[^>]*class="lnk-blk"/);
+    const ratingMatch = content.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>[\s\S]*?<span>TMDB<\/span>\s*([\d.]+)/);
+    
+    movies.push({
+      title: titleMatch ? titleMatch[1].replace(/&#038;/g, '&').trim() : '',
+      image: normalizeImage(imageMatch ? imageMatch[1] : null),
+      imageAlt: imageMatch ? imageMatch[2] : '',
+      url: urlMatch ? urlMatch[1] : '',
+      rating: ratingMatch ? ratingMatch[1] : ''
     });
-  });
+  }
   
-  return relatedMovies;
+  return movies;
 }
 
-// Main scraper function
-async function scrapeMoviePage(baseUrl, moviePath) {
-  try {
-    const movieUrl = `${baseUrl}/movies/${moviePath}`;
-    console.log(`Scraping: ${movieUrl}`);
-    
-    const html = await fetchWithProxy(movieUrl, baseUrl);
-    const $ = cheerio.load(html);
-    
-    // Get post ID from body class
-    const bodyClass = $('body').attr('class') || '';
-    const postIdMatch = bodyClass.match(/postid-(\d+)/);
-    const postId = postIdMatch ? postIdMatch[1] : null;
-    
-    const data = {
-      baseUrl: baseUrl,
-      movieUrl: movieUrl,
-      moviePath: moviePath,
-      postId: postId,
+async function scrapeMoviePage(baseUrl, path, apiUrl) {
+  const movieUrl = `${baseUrl}/movies/${path}/`;
+  const html = await fetchWithProxy(movieUrl);
+  
+  const postId = extractPostId(html);
+  const movieDetails = scrapeMovieDetails(html);
+  const videoOptions = scrapeVideoOptions(html, apiUrl);
+  const comments = scrapeComments(html);
+  const relatedMovies = scrapeRelatedMovies(html);
+  
+  return {
+    success: true,
+    data: {
+      baseUrl,
+      movieUrl,
+      moviePath: path,
+      postId,
       scrapedAt: new Date().toISOString(),
-      movieDetails: scrapeMovieDetails($),
-      videoOptions: await scrapeVideoOptions($),
-      comments: scrapeComments($),
-      relatedMovies: scrapeRelatedMovies($)
-    };
-    
-    return {
-      success: true,
-      data: data,
-      stats: {
-        hasMovieDetails: !!data.movieDetails.title,
-        hasBackdrop: !!(data.movieDetails.backdrop.header || data.movieDetails.backdrop.footer),
-        videoOptionsCount: data.videoOptions.iframes.length,
-        commentsCount: data.comments.length,
-        relatedMoviesCount: data.relatedMovies.length
-      }
-    };
-    
-  } catch (error) {
-    console.error('Scraping error:', error.message);
-    
-    if (error.message.includes('404')) {
-      return {
-        success: false,
-        error: 'Movie not found',
-        statusCode: 404
-      };
+      movieDetails,
+      videoOptions,
+      comments,
+      relatedMovies
+    },
+    stats: {
+      hasMovieDetails: true,
+      hasBackdrop: !!(movieDetails.backdrop.header || movieDetails.backdrop.footer),
+      videoOptionsCount: videoOptions.iframes.length,
+      commentsCount: comments.length,
+      relatedMoviesCount: relatedMovies.length
     }
-    
-    if (error.message.includes('403')) {
-      return {
-        success: false,
-        error: 'Access forbidden (403). The website may be blocking requests.',
-        statusCode: 403
-      };
-    }
-    
-    return {
-      success: false,
-      error: error.message
-    };
-  }
+  };
 }
 
-// Vercel serverless function handler
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
-  
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  
-  if (req.method !== 'GET') {
-    return res.status(405).json({ 
-      success: false, 
-      error: 'Method not allowed. Use GET request.' 
+export default async function handler(request) {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   }
   
+  if (request.method !== 'GET') {
+    return new Response(
+      JSON.stringify({ success: false, error: 'Method not allowed. Use GET request.' }),
+      { status: 405, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+  
   try {
+    const url = new URL(request.url);
+    const path = url.searchParams.get('path');
+    
+    if (!path) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Movie path parameter "path" is required.' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    
     const baseUrl = await getBaseUrl();
-    
     if (!baseUrl) {
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Base URL not found.' 
-      });
+      return new Response(
+        JSON.stringify({ success: false, error: 'Base URL not found.' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
     }
     
-    // Get movie path from query parameter
-    const moviePath = req.query.path;
+    const apiUrl = `${url.protocol}//${url.host}`;
+    const result = await scrapeMoviePage(baseUrl, path, apiUrl);
     
-    if (!moviePath) {
-      return res.status(400).json({
-        success: false,
-        error: 'Movie path is required. Use ?path=movie-name'
-      });
-    }
-    
-    const result = await scrapeMoviePage(baseUrl, moviePath);
-    
-    if (!result.success && result.statusCode === 404) {
-      return res.status(404).json(result);
-    }
-    
-    if (!result.success && result.statusCode === 403) {
-      return res.status(403).json(result);
-    }
-    
-    res.status(result.success ? 200 : 500).json(result);
+    return new Response(
+      JSON.stringify(result),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600'
+        }
+      }
+    );
     
   } catch (error) {
     console.error('Handler error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error', 
-      message: error.message 
-    });
+    return new Response(
+      JSON.stringify({ success: false, error: 'Internal server error', message: error.message }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
-};
+}
