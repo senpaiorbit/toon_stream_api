@@ -1,495 +1,317 @@
-// api/letter.js
-const cheerio = require('cheerio');
+// /api/letter.js
 
-// Cache for base URL and proxy URL (5 minutes)
+export const config = { runtime: "edge" };
+
 let baseUrlCache = { url: null, timestamp: 0 };
 let proxyUrlCache = { url: null, timestamp: 0 };
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
 
-// Fetch base URL from GitHub with caching
 async function getBaseUrl() {
   const now = Date.now();
-  
   if (baseUrlCache.url && (now - baseUrlCache.timestamp) < CACHE_DURATION) {
     return baseUrlCache.url;
   }
-  
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt');
     if (response.ok) {
       const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
       baseUrlCache = { url: baseUrl, timestamp: now };
       return baseUrl;
     }
   } catch (error) {
-    console.error('Error fetching base URL from GitHub:', error.message);
+    console.error('Error fetching base URL:', error.message);
   }
-  
-  // Fallback
   const fallbackUrl = 'https://toonstream.dad';
   baseUrlCache = { url: fallbackUrl, timestamp: now };
   return fallbackUrl;
 }
 
-// Fetch proxy URL from GitHub with caching
 async function getProxyUrl() {
   const now = Date.now();
-  
   if (proxyUrlCache.url && (now - proxyUrlCache.timestamp) < CACHE_DURATION) {
     return proxyUrlCache.url;
   }
-  
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
-    
+    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt');
     if (response.ok) {
       const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
       proxyUrlCache = { url: proxyUrl, timestamp: now };
       return proxyUrl;
     }
   } catch (error) {
-    console.error('Error fetching proxy URL from GitHub:', error.message);
+    console.error('Error fetching proxy URL:', error.message);
   }
-  
   proxyUrlCache = { url: null, timestamp: now };
   return null;
 }
 
-// Fetch using Cloudflare proxy (returns HTML as text)
-async function fetchViaProxy(path) {
+async function fetchWithProxy(targetUrl) {
   const proxyUrl = await getProxyUrl();
-  
-  if (!proxyUrl) {
-    throw new Error('Cloudflare proxy URL not available');
-  }
-  
-  try {
-    const url = `${proxyUrl}?path=${encodeURIComponent(path)}`;
-    console.log(`Fetching via proxy: ${url}`);
-    
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/plain,text/html,*/*'
-      },
-      signal: AbortSignal.timeout(30000)
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Proxy returned ${response.status}: ${response.statusText}`);
+  if (proxyUrl) {
+    try {
+      const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
+      const proxyResponse = await fetch(proxyFetchUrl, { signal: AbortSignal.timeout(30000) });
+      if (proxyResponse.ok) return await proxyResponse.text();
+    } catch (proxyError) {
+      console.log('Proxy fetch failed:', proxyError.message);
     }
+  }
+  const directResponse = await fetch(targetUrl, { signal: AbortSignal.timeout(30000) });
+  if (!directResponse.ok) {
+    throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
+  }
+  return await directResponse.text();
+}
+
+function normalizeImage(url) {
+  if (!url) return null;
+  let normalized = url.startsWith('//') ? 'https:' + url : url;
+  normalized = normalized.replace(/\/w\d+\//g, '/w500/');
+  return normalized;
+}
+
+function scrapeAlphabetNav(html) {
+  const letters = [];
+  const navPattern = /<ul[^>]*class="[^"]*az-lst[^"]*"[^>]*>([\s\S]*?)<\/ul>/;
+  const navMatch = html.match(navPattern);
+  
+  if (!navMatch) return letters;
+  
+  const linkPattern = /<a[^>]*class="[^"]*btn([^"]*)"[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+  const matches = [...navMatch[1].matchAll(linkPattern)];
+  
+  for (const match of matches) {
+    letters.push({
+      letter: match[3].trim(),
+      url: match[2],
+      active: match[1].includes('on')
+    });
+  }
+  
+  return letters;
+}
+
+function scrapeContent(html) {
+  const results = [];
+  const contentPattern = /<div[^>]*id="movies-a"[^>]*>[\s\S]*?<ul[^>]*class="post-lst[^"]*"[^>]*>([\s\S]*?)<\/ul>/;
+  const contentMatch = html.match(contentPattern);
+  
+  if (!contentMatch) return results;
+  
+  const liPattern = /<li[^>]*id="post-(\d+)"[^>]*class="([^"]*)"[^>]*>\s*<article[^>]*>([\s\S]*?)<\/article>\s*<\/li>/g;
+  const items = [...contentMatch[1].matchAll(liPattern)];
+  
+  for (const item of items) {
+    const postId = item[1];
+    const classList = item[2];
+    const content = item[3];
     
-    const html = await response.text();
-    console.log(`✓ Proxy fetch successful for path: ${path}`);
-    return html;
-  } catch (error) {
-    throw new Error(`Proxy fetch failed: ${error.message}`);
-  }
-}
-
-function extractImageUrl(imgSrc) {
-  if (!imgSrc) return null;
-  if (imgSrc.startsWith('//')) {
-    return 'https:' + imgSrc;
-  }
-  return imgSrc;
-}
-
-function extractMetadata(classList) {
-  const metadata = {
-    categories: [],
-    tags: [],
-    cast: [],
-    directors: [],
-    countries: [],
-    letters: [],
-    year: null,
-    contentType: null
-  };
-
-  if (!classList) return metadata;
-
-  // Extract categories
-  const categoryMatches = classList.match(/category-[\w-]+/g);
-  if (categoryMatches) {
-    categoryMatches.forEach(cat => {
-      metadata.categories.push(cat.replace('category-', '').replace(/-/g, ' '));
-    });
-  }
-
-  // Extract tags
-  const tagMatches = classList.match(/tag-[\w-]+/g);
-  if (tagMatches) {
-    tagMatches.forEach(tag => {
-      metadata.tags.push(tag.replace('tag-', '').replace(/-/g, ' '));
-    });
-  }
-
-  // Extract cast
-  const castMatches = classList.match(/cast[_-][\w-]+/g);
-  if (castMatches) {
-    castMatches.forEach(member => {
-      metadata.cast.push(member.replace(/cast[_-]/, '').replace(/-/g, ' '));
-    });
-  }
-
-  // Extract directors
-  const directorMatches = classList.match(/directors[_-][\w-]+/g);
-  if (directorMatches) {
-    directorMatches.forEach(director => {
-      metadata.directors.push(director.replace(/directors[_-]/, '').replace(/-/g, ' '));
-    });
-  }
-
-  // Extract countries
-  const countryMatches = classList.match(/country-[\w-]+/g);
-  if (countryMatches) {
-    countryMatches.forEach(country => {
-      metadata.countries.push(country.replace('country-', '').replace(/-/g, ' '));
-    });
-  }
-
-  // Extract letters
-  const letterMatches = classList.match(/letters-([\w-]+)/g);
-  if (letterMatches) {
-    letterMatches.forEach(letter => {
-      metadata.letters.push(letter.replace('letters-', ''));
-    });
-  }
-
-  // Extract year
-  const yearMatch = classList.match(/annee-(\d+)/);
-  if (yearMatch) {
-    metadata.year = yearMatch[1];
-  }
-
-  // Determine content type
-  if (classList.includes('type-series')) {
-    metadata.contentType = 'series';
-  } else if (classList.includes('type-movies')) {
-    metadata.contentType = 'movie';
-  }
-
-  return metadata;
-}
-
-// Scrape alphabet navigation
-function scrapeAlphabetNav($) {
-  const alphabet = [];
-  
-  $('.az-lst a').each((index, element) => {
-    const $elem = $(element);
-    alphabet.push({
-      letter: $elem.text().trim(),
-      url: $elem.attr('href') || '',
-      active: $elem.hasClass('on')
-    });
-  });
-  
-  return alphabet;
-}
-
-// Scrape content items (series/movies)
-function scrapeContent($) {
-  const content = [];
-  
-  $('.section.movies .post-lst li').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
-    const postId = $elem.attr('id');
-    const classList = $elem.attr('class');
+    const titleMatch = content.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
+    const imageMatch = content.match(/<img[^>]+src="([^"]+)"[^>]*alt="([^"]*)"/);
+    const ratingMatch = content.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>[\s\S]*?<span>TMDB<\/span>\s*([\d.]+)/);
+    const urlMatch = content.match(/<a[^>]+href="([^"]+)"[^>]*class="lnk-blk"/);
     
-    const metadata = extractMetadata(classList);
+    const contentType = classList.includes('type-series') ? 'series' : 
+                       classList.includes('type-movies') ? 'movie' : 'unknown';
     
-    content.push({
-      id: postId || '',
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null,
-      ...metadata
+    const categories = [];
+    const categoryMatches = [...classList.matchAll(/category-([\w-]+)/g)];
+    categoryMatches.forEach(m => categories.push(m[1]));
+    
+    const tags = [];
+    const tagMatches = [...classList.matchAll(/tag-([\w-]+)/g)];
+    tagMatches.forEach(m => tags.push(m[1]));
+    
+    const cast = [];
+    const castMatches = [...classList.matchAll(/cast(?:_tv)?-([\w-]+)/g)];
+    castMatches.forEach(m => cast.push(m[1].replace(/-/g, ' ')));
+    
+    const directors = [];
+    const directorMatches = [...classList.matchAll(/directors?(?:_tv)?-([\w-]+)/g)];
+    directorMatches.forEach(m => directors.push(m[1].replace(/-/g, ' ')));
+    
+    results.push({
+      id: `post-${postId}`,
+      title: titleMatch ? titleMatch[1].trim() : '',
+      image: normalizeImage(imageMatch ? imageMatch[1] : null),
+      imageAlt: imageMatch ? imageMatch[2] : '',
+      rating: ratingMatch ? ratingMatch[1] : null,
+      url: urlMatch ? urlMatch[1] : '',
+      contentType: contentType,
+      categories: categories,
+      tags: tags,
+      cast: cast.slice(0, 10),
+      directors: directors
     });
-  });
+  }
   
-  return content;
+  return results;
 }
 
-// Scrape pagination
-function scrapePagination($) {
+function scrapePagination(html) {
   const pagination = {
     currentPage: 1,
     totalPages: 1,
-    pages: [],
-    nextUrl: null,
-    prevUrl: null
+    hasNextPage: false,
+    hasPrevPage: false,
+    nextPageUrl: null,
+    prevPageUrl: null,
+    pages: []
   };
   
-  $('.navigation.pagination .nav-links a').each((index, element) => {
-    const $elem = $(element);
-    const text = $elem.text().trim();
-    const href = $elem.attr('href');
-    
-    if ($elem.hasClass('current')) {
-      pagination.currentPage = parseInt(text) || 1;
-    }
-    
-    if (text === 'NEXT') {
-      pagination.nextUrl = href;
-    } else if (text === 'PREV' || text === 'PREVIOUS') {
-      pagination.prevUrl = href;
-    } else if (!isNaN(text) && text !== '...') {
+  const paginationPattern = /<nav[^>]*class="[^"]*navigation pagination[^"]*"[^>]*>[\s\S]*?<div[^>]*class="[^"]*nav-links[^"]*"[^>]*>([\s\S]*?)<\/div>/;
+  const paginationMatch = html.match(paginationPattern);
+  
+  if (!paginationMatch) return pagination;
+  
+  const content = paginationMatch[1];
+  
+  const currentMatch = content.match(/<a[^>]*class="[^"]*page-link current[^"]*"[^>]*href="([^"]+)"[^>]*>(\d+)<\/a>/);
+  if (currentMatch) {
+    pagination.currentPage = parseInt(currentMatch[2]);
+  }
+  
+  const prevMatch = content.match(/<a[^>]+href="([^"]+)"[^>]*>PREV<\/a>/);
+  if (prevMatch) {
+    pagination.hasPrevPage = true;
+    pagination.prevPageUrl = prevMatch[1];
+  }
+  
+  const nextMatch = content.match(/<a[^>]+href="([^"]+)"[^>]*>NEXT<\/a>/);
+  if (nextMatch) {
+    pagination.hasNextPage = true;
+    pagination.nextPageUrl = nextMatch[1];
+  }
+  
+  const pagePattern = /<a[^>]*class="[^"]*page-link[^"]*"[^>]*href="([^"]+)"[^>]*>(\d+)<\/a>/g;
+  const pageMatches = [...content.matchAll(pagePattern)];
+  
+  pageMatches.forEach(match => {
+    const pageNum = parseInt(match[2]);
+    if (!pagination.pages.find(p => p.page === pageNum)) {
       pagination.pages.push({
-        page: parseInt(text),
-        url: href,
-        current: $elem.hasClass('current')
+        page: pageNum,
+        url: match[1],
+        current: match[0].includes('current')
       });
-      
-      const pageNum = parseInt(text);
-      if (pageNum > pagination.totalPages) {
-        pagination.totalPages = pageNum;
-      }
     }
   });
+  
+  if (pagination.pages.length > 0) {
+    pagination.totalPages = Math.max(...pagination.pages.map(p => p.page));
+  }
   
   return pagination;
 }
 
-// Scrape random series sidebar
-function scrapeRandomSeries($) {
-  const randomSeries = [];
+async function scrapeLetterPage(baseUrl, letter, page = 1) {
+  const letterUrl = page > 1 
+    ? `${baseUrl}/home/letter/${letter}/page/${page}/`
+    : `${baseUrl}/home/letter/${letter}/`;
   
-  $('#widget_list_movies_series-4 .post-lst li').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
-    const postId = $elem.attr('id');
-    const classList = $elem.attr('class');
-    
-    const metadata = extractMetadata(classList);
-    
-    randomSeries.push({
-      id: postId || '',
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null,
-      ...metadata
-    });
-  });
+  const html = await fetchWithProxy(letterUrl);
   
-  return randomSeries;
-}
-
-// Scrape random movies sidebar
-function scrapeRandomMovies($) {
-  const randomMovies = [];
+  const alphabetNav = scrapeAlphabetNav(html);
+  const results = scrapeContent(html);
+  const pagination = scrapePagination(html);
   
-  $('#widget_list_movies_series-5 .post-lst li').each((index, element) => {
-    const $elem = $(element);
-    const $link = $elem.find('.lnk-blk');
-    const $img = $elem.find('img');
-    const $title = $elem.find('.entry-title');
-    const $vote = $elem.find('.vote');
-    const postId = $elem.attr('id');
-    const classList = $elem.attr('class');
-    
-    const metadata = extractMetadata(classList);
-    
-    randomMovies.push({
-      id: postId || '',
-      title: $title.text().trim(),
-      image: extractImageUrl($img.attr('src')),
-      imageAlt: $img.attr('alt') || '',
-      url: $link.attr('href') || '',
-      rating: $vote.text().replace('TMDB', '').trim() || null,
-      ...metadata
-    });
-  });
+  const seriesCount = results.filter(r => r.contentType === 'series').length;
+  const moviesCount = results.filter(r => r.contentType === 'movie').length;
   
-  return randomMovies;
-}
-
-// Scrape schedule
-function scrapeSchedule($) {
-  const schedule = {};
-  const days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
-  
-  days.forEach(day => {
-    const daySchedule = [];
-    
-    $(`#${day} .custom-schedule-item`).each((index, element) => {
-      const $elem = $(element);
-      const $time = $elem.find('.schedule-time');
-      const $description = $elem.find('.schedule-description');
-      
-      daySchedule.push({
-        time: $time.text().trim(),
-        show: $description.text().trim()
-      });
-    });
-    
-    schedule[day] = daySchedule;
-  });
-  
-  return schedule;
-}
-
-// Main scraper function using Cloudflare proxy
-async function scrapeLetterPage(baseUrl, letter, pageNumber = 1) {
-  try {
-    // Construct the path for the proxy
-    let path;
-    if (pageNumber === 1) {
-      path = `letter/${letter}/`;
-    } else {
-      path = `letter/${letter}/page/${pageNumber}/`;
-    }
-    
-    console.log(`Scraping letter: ${letter}, page: ${pageNumber}`);
-    
-    const html = await fetchViaProxy(path);
-    const $ = cheerio.load(html);
-    
-    // Get page title
-    const pageTitle = $('.section-title').first().text().trim();
-    
-    const data = {
+  return {
+    success: true,
+    data: {
       baseUrl: baseUrl,
-      pageUrl: `${baseUrl}/letter/${letter}/${pageNumber > 1 ? `page/${pageNumber}/` : ''}`,
-      pageType: 'letter',
       letter: letter.toUpperCase(),
-      pageNumber: pageNumber,
-      pageTitle: pageTitle,
-      scrapedAt: new Date().toISOString(),
-      alphabetNav: scrapeAlphabetNav($),
-      content: scrapeContent($),
-      pagination: scrapePagination($),
-      randomSeries: scrapeRandomSeries($),
-      randomMovies: scrapeRandomMovies($),
-      schedule: scrapeSchedule($)
-    };
-    
-    return {
-      success: true,
-      data: data,
-      stats: {
-        contentCount: data.content.length,
-        seriesCount: data.content.filter(c => c.contentType === 'series').length,
-        moviesCount: data.content.filter(c => c.contentType === 'movie').length,
-        randomSeriesCount: data.randomSeries.length,
-        randomMoviesCount: data.randomMovies.length,
-        currentPage: data.pagination.currentPage,
-        totalPages: data.pagination.totalPages
+      currentPage: pagination.currentPage,
+      totalPages: pagination.totalPages,
+      alphabetNav: alphabetNav,
+      results: results,
+      pagination: {
+        hasNextPage: pagination.hasNextPage,
+        hasPrevPage: pagination.hasPrevPage,
+        nextPageUrl: pagination.nextPageUrl,
+        prevPageUrl: pagination.prevPageUrl,
+        currentPage: pagination.currentPage,
+        totalPages: pagination.totalPages,
+        pages: pagination.pages
       }
-    };
-    
-  } catch (error) {
-    console.error('Scraping error:', error.message);
-    
-    if (error.message.includes('404')) {
-      return {
-        success: false,
-        error: 'Letter page not found',
-        statusCode: 404
-      };
+    },
+    stats: {
+      resultsCount: results.length,
+      seriesCount: seriesCount,
+      moviesCount: moviesCount,
+      alphabetNavCount: alphabetNav.length
     }
-    
-    return {
-      success: false,
-      error: error.message
-    };
-  }
+  };
 }
 
-// Vercel serverless function handler
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
-  
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  
-  if (req.method !== 'GET') {
-    return res.status(405).json({ 
-      success: false, 
-      error: 'Method not allowed. Use GET request.' 
+export default async function handler(request) {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
     });
   }
   
+  if (request.method !== 'GET') {
+    return new Response(
+      JSON.stringify({ success: false, error: 'Method not allowed. Use GET request.' }),
+      { status: 405, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+  
   try {
-    const baseUrl = await getBaseUrl();
-    
-    if (!baseUrl) {
-      return res.status(500).json({ 
-        success: false, 
-        error: 'Base URL not found.' 
-      });
-    }
-    
-    // Get letter from query parameter
-    const letter = req.query.letter;
+    const url = new URL(request.url);
+    const letter = url.searchParams.get('letter');
+    const page = parseInt(url.searchParams.get('page') || '1');
     
     if (!letter) {
-      return res.status(400).json({
-        success: false,
-        error: 'Letter parameter is required. Use ?letter=A or ?letter=0-9'
-      });
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'Letter parameter "letter" is required (e.g., ?letter=a or ?letter=0-9 for #).' 
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
     }
     
-    // Validate letter
-    const validLetters = ['0-9', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'];
-    if (!validLetters.includes(letter.toUpperCase())) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid letter. Must be A-Z or 0-9'
-      });
+    const baseUrl = await getBaseUrl();
+    if (!baseUrl) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'Base URL not found.' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
     }
     
-    // Get page number from query parameter
-    const pageNumber = parseInt(req.query.page) || 1;
+    const result = await scrapeLetterPage(baseUrl, letter, page);
     
-    if (pageNumber < 1) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid page number. Must be 1 or greater.'
-      });
-    }
-    
-    const result = await scrapeLetterPage(baseUrl, letter, pageNumber);
-    
-    if (!result.success && result.statusCode === 404) {
-      return res.status(404).json(result);
-    }
-    
-    res.status(result.success ? 200 : 500).json(result);
+    return new Response(
+      JSON.stringify(result),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600'
+        }
+      }
+    );
     
   } catch (error) {
     console.error('Handler error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error', 
-      message: error.message 
-    });
+    return new Response(
+      JSON.stringify({ 
+        success: false, 
+        error: 'Internal server error', 
+        message: error.message 
+      }),
+      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    );
   }
-};
+}
+
