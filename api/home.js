@@ -93,14 +93,16 @@ function normalizeImage(url) {
   return normalized;
 }
 
-function extractText(html, pattern) {
-  const match = html.match(pattern);
-  return match ? match[1].replace(/<[^>]+>/g, '').trim() : '';
-}
-
-function extractAttr(html, pattern) {
-  const match = html.match(pattern);
-  return match ? match[1] : null;
+function decodeHTML(text) {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&#8217;/g, "'")
+    .replace(/&#8211;/g, '-')
+    .replace(/&#8230;/g, '...');
 }
 
 function extractEpisodeNumber(text) {
@@ -115,59 +117,31 @@ function extractEpisodeNumber(text) {
   return { full: text };
 }
 
-function extractCategories(classList) {
-  const categories = [];
-  const categoryMatches = [...(classList.matchAll(/category-([\w-]+)/g))];
-  categoryMatches.forEach(match => categories.push(match[1]));
-  return categories;
-}
-
-function extractTags(classList) {
-  const tags = [];
-  const tagMatches = [...(classList.matchAll(/tag-([\w-]+)/g))];
-  tagMatches.forEach(match => tags.push(match[1]));
-  return tags;
-}
-
-function extractCast(classList) {
-  const cast = [];
-  const castMatches = [...(classList.matchAll(/cast[_-]([\w-]+)/g))];
-  castMatches.forEach(match => cast.push(match[1].replace(/-/g, ' ')));
-  return cast.slice(0, 10);
-}
-
-function extractDirectors(classList) {
-  const directors = [];
-  const directorMatches = [...(classList.matchAll(/directors-([\w-]+)/g))];
-  directorMatches.forEach(match => directors.push(match[1].replace(/-/g, ' ')));
-  return directors;
-}
-
-function extractCountries(classList) {
-  const countries = [];
-  const countryMatches = [...(classList.matchAll(/country-([\w-]+)/g))];
-  countryMatches.forEach(match => countries.push(match[1].replace(/-/g, ' ')));
-  return countries;
-}
-
 function scrapeFeaturedShows(html) {
   const featured = [];
-  const pattern = /<div[^>]*class="[^"]*gs_logo_single--wrapper[^"]*"[^>]*>(.*?)<\/div>/gs;
-  const matches = [...html.matchAll(pattern)];
+  const wrapperPattern = /<div[^>]*class="[^"]*gs_logo_single--wrapper[^"]*"[^>]*>[\s\S]*?<\/div>/g;
+  const wrappers = [...html.matchAll(wrapperPattern)];
   
-  for (const match of matches) {
-    const content = match[1];
-    const title = extractAttr(content, /<img[^>]+(?:title|alt)="([^"]+)"/);
-    const image = extractAttr(content, /<img[^>]+src="([^"]+)"/);
-    const searchUrl = extractAttr(content, /<a[^>]+href="([^"]+)"/);
-    const srcset = extractAttr(content, /<img[^>]+srcset="([^"]+)"/);
+  for (const wrapper of wrappers) {
+    const content = wrapper[0];
     
-    featured.push({
-      title: title || '',
-      image: normalizeImage(image),
-      searchUrl: searchUrl || '',
-      srcset: srcset || null
-    });
+    const hrefMatch = content.match(/<a[^>]+href="([^"]+)"/);
+    const imgMatch = content.match(/<img[^>]*>/);
+    
+    if (imgMatch) {
+      const img = imgMatch[0];
+      const srcMatch = img.match(/src="([^"]+)"/);
+      const titleMatch = img.match(/title="([^"]+)"/);
+      const altMatch = img.match(/alt="([^"]+)"/);
+      const srcsetMatch = img.match(/srcset="([^"]+)"/);
+      
+      featured.push({
+        title: decodeHTML(titleMatch?.[1] || altMatch?.[1] || ''),
+        image: normalizeImage(srcMatch?.[1]),
+        searchUrl: hrefMatch?.[1] || '',
+        srcset: srcsetMatch?.[1] || null
+      });
+    }
   }
   
   return featured;
@@ -175,32 +149,34 @@ function scrapeFeaturedShows(html) {
 
 function scrapeLatestEpisodes(html) {
   const episodes = [];
-  const sectionPattern = /<div[^>]*id="widget_list_episodes-8"[^>]*>(.*?)<\/div>\s*<\/div>/s;
-  const sectionMatch = html.match(sectionPattern);
   
-  if (!sectionMatch) return episodes;
+  const widgetMatch = html.match(/<div[^>]*id="widget_list_episodes-8"[^>]*class="[^"]*widget[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/);
   
-  const section = sectionMatch[1];
-  const liPattern = /<li[^>]*>(.*?)<\/li>/gs;
-  const items = [...section.matchAll(liPattern)];
+  if (!widgetMatch) return episodes;
+  
+  const widgetContent = widgetMatch[1];
+  const liPattern = /<li[^>]*>([\s\S]*?)<\/li>/g;
+  const items = [...widgetContent.matchAll(liPattern)];
   
   for (const item of items) {
     const content = item[1];
     
-    const title = extractText(content, /<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
-    const url = extractAttr(content, /<a[^>]+href="([^"]+)"/);
-    const image = extractAttr(content, /<img[^>]+src="([^"]+)"/);
-    const imageAlt = extractAttr(content, /<img[^>]+alt="([^"]+)"/);
-    const numEpi = extractText(content, /<span[^>]*class="[^"]*num-epi[^"]*"[^>]*>(.*?)<\/span>/);
-    const timeAgo = extractText(content, /<span[^>]*class="[^"]*time[^"]*"[^>]*>(.*?)<\/span>/);
+    const linkMatch = content.match(/<a[^>]+class="[^"]*lnk-blk[^"]*"[^>]+href="([^"]+)"/);
+    const imgMatch = content.match(/<img[^>]+src="([^"]+)"[^>]*(?:alt="([^"]*)")?/);
+    const titleMatch = content.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/);
+    const numEpiMatch = content.match(/<span[^>]*class="[^"]*num-epi[^"]*"[^>]*>([\s\S]*?)<\/span>/);
+    const timeMatch = content.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>([\s\S]*?)<\/span>/);
+    
+    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+    const numEpi = numEpiMatch ? numEpiMatch[1].replace(/<[^>]+>/g, '').trim() : '';
     
     episodes.push({
-      title: title,
+      title: decodeHTML(title),
       episodeNumber: extractEpisodeNumber(numEpi),
-      image: normalizeImage(image),
-      url: url || '',
-      timeAgo: timeAgo,
-      imageAlt: imageAlt || ''
+      image: normalizeImage(imgMatch?.[1]),
+      url: linkMatch?.[1] || '',
+      timeAgo: timeMatch ? timeMatch[1].trim() : '',
+      imageAlt: imgMatch?.[2] || ''
     });
   }
   
@@ -209,38 +185,61 @@ function scrapeLatestEpisodes(html) {
 
 function scrapeContent(html, sectionId) {
   const content = [];
-  const sectionPattern = new RegExp(`<div[^>]*id="${sectionId}"[^>]*>(.*?)<\\/div>\\s*<\\/div>`, 's');
+  
+  const sectionPattern = new RegExp(`<div[^>]*id="${sectionId}"[^>]*class="[^"]*widget[^"]*"[^>]*>([\\s\\S]*?)<\\/div>\\s*<\\/div>`, '');
   const sectionMatch = html.match(sectionPattern);
   
   if (!sectionMatch) return content;
   
-  const section = sectionMatch[1];
-  const liPattern = /<li[^>]*class="([^"]*)"[^>]*id="([^"]*)"[^>]*>(.*?)<\/li>/gs;
-  const items = [...section.matchAll(liPattern)];
+  const sectionContent = sectionMatch[1];
+  const liPattern = /<li[^>]*class="([^"]*)"[^>]*(?:id="([^"]*)")?[^>]*>([\s\S]*?)<\/li>/g;
+  const items = [...sectionContent.matchAll(liPattern)];
   
   for (const item of items) {
     const classList = item[1];
-    const postId = item[2];
+    const postId = item[2] || '';
     const itemContent = item[3];
     
-    const title = extractText(itemContent, /<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
-    const url = extractAttr(itemContent, /<a[^>]+href="([^"]+)"/);
-    const image = extractAttr(itemContent, /<img[^>]+src="([^"]+)"/);
-    const imageAlt = extractAttr(itemContent, /<img[^>]+alt="([^"]+)"/);
-    const rating = extractText(itemContent, /<span[^>]*class="[^"]*vote[^"]*"[^>]*>(.*?)<\/span>/).replace('TMDB', '').trim();
+    const linkMatch = itemContent.match(/<a[^>]+class="[^"]*lnk-blk[^"]*"[^>]+href="([^"]+)"/);
+    const imgMatch = itemContent.match(/<img[^>]+src="([^"]+)"[^>]*(?:alt="([^"]*)")?/);
+    const titleMatch = itemContent.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>([\s\S]*?)<\/h2>/);
+    const voteMatch = itemContent.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>([\s\S]*?)<\/span>/);
+    
+    const title = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+    const rating = voteMatch ? voteMatch[1].replace('TMDB', '').replace(/<[^>]+>/g, '').trim() : null;
+    
+    const categories = [];
+    const categoryMatches = [...classList.matchAll(/category-([\w-]+)/g)];
+    categoryMatches.forEach(match => categories.push(match[1]));
+    
+    const tags = [];
+    const tagMatches = [...classList.matchAll(/tag-([\w-]+)/g)];
+    tagMatches.forEach(match => tags.push(match[1]));
+    
+    const cast = [];
+    const castMatches = [...classList.matchAll(/cast[_-]([\w-]+)/g)];
+    castMatches.forEach(match => cast.push(match[1].replace(/-/g, ' ')));
+    
+    const directors = [];
+    const directorMatches = [...classList.matchAll(/directors-([\w-]+)/g)];
+    directorMatches.forEach(match => directors.push(match[1].replace(/-/g, ' ')));
+    
+    const countries = [];
+    const countryMatches = [...classList.matchAll(/country-([\w-]+)/g)];
+    countryMatches.forEach(match => countries.push(match[1].replace(/-/g, ' ')));
     
     content.push({
-      id: postId || '',
-      title: title,
-      image: normalizeImage(image),
-      url: url || '',
-      rating: rating || null,
-      imageAlt: imageAlt || '',
-      categories: extractCategories(classList),
-      tags: extractTags(classList),
-      cast: extractCast(classList),
-      directors: extractDirectors(classList),
-      countries: extractCountries(classList)
+      id: postId,
+      title: decodeHTML(title),
+      image: normalizeImage(imgMatch?.[1]),
+      url: linkMatch?.[1] || '',
+      rating: rating,
+      imageAlt: imgMatch?.[2] || '',
+      categories: categories,
+      tags: tags,
+      cast: cast.slice(0, 10),
+      directors: directors,
+      countries: countries
     });
   }
   
@@ -253,23 +252,28 @@ function scrapeSchedule(html) {
   
   for (const day of days) {
     const daySchedule = [];
-    const dayPattern = new RegExp(`<div[^>]*id="${day}"[^>]*>(.*?)<\\/div>`, 's');
+    const dayPattern = new RegExp(`<div[^>]*id="${day}"[^>]*class="[^"]*custom-schedule[^"]*"[^>]*>([\\s\\S]*?)<\\/div>`, '');
     const dayMatch = html.match(dayPattern);
     
     if (dayMatch) {
       const dayContent = dayMatch[1];
-      const itemPattern = /<div[^>]*class="[^"]*custom-schedule-item[^"]*"[^>]*>(.*?)<\/div>/gs;
+      const itemPattern = /<div[^>]*class="[^"]*custom-schedule-item[^"]*"[^>]*>([\s\S]*?)<\/div>/g;
       const items = [...dayContent.matchAll(itemPattern)];
       
       for (const item of items) {
         const content = item[1];
-        const time = extractText(content, /<span[^>]*class="[^"]*schedule-time[^"]*"[^>]*>(.*?)<\/span>/);
-        const show = extractText(content, /<span[^>]*class="[^"]*schedule-description[^"]*"[^>]*>(.*?)<\/span>/);
+        const timeMatch = content.match(/<span[^>]*class="[^"]*schedule-time[^"]*"[^>]*>([\s\S]*?)<\/span>/);
+        const showMatch = content.match(/<span[^>]*class="[^"]*schedule-description[^"]*"[^>]*>([\s\S]*?)<\/span>/);
         
-        daySchedule.push({
-          time: time,
-          show: show
-        });
+        const time = timeMatch ? timeMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+        const show = showMatch ? showMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+        
+        if (time || show) {
+          daySchedule.push({
+            time: time,
+            show: decodeHTML(show)
+          });
+        }
       }
     }
     
@@ -281,20 +285,23 @@ function scrapeSchedule(html) {
 
 function scrapeAlphabetNav(html) {
   const alphabet = [];
-  const pattern = /<div[^>]*class="[^"]*az-lst[^"]*"[^>]*>(.*?)<\/div>/s;
-  const match = html.match(pattern);
+  const navPattern = /<div[^>]*class="[^"]*az-lst[^"]*"[^>]*>([\s\S]*?)<\/div>/;
+  const navMatch = html.match(navPattern);
   
-  if (!match) return alphabet;
+  if (!navMatch) return alphabet;
   
-  const content = match[1];
-  const linkPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gs;
-  const links = [...content.matchAll(linkPattern)];
+  const navContent = navMatch[1];
+  const linkPattern = /<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  const links = [...navContent.matchAll(linkPattern)];
   
   for (const link of links) {
-    alphabet.push({
-      letter: link[2].trim(),
-      url: link[1]
-    });
+    const letter = link[2].replace(/<[^>]+>/g, '').trim();
+    if (letter) {
+      alphabet.push({
+        letter: letter,
+        url: link[1]
+      });
+    }
   }
   
   return alphabet;
