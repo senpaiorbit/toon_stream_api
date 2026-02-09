@@ -1,12 +1,11 @@
-// api/episode.js
-const cheerio = require('cheerio');
+// /api/episode.js
 
-// Cache for base URL and proxy URL (5 minutes)
+export const config = { runtime: "edge" };
+
 let baseUrlCache = { url: null, timestamp: 0 };
 let proxyUrlCache = { url: null, timestamp: 0 };
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 5 * 60 * 1000;
 
-// Fetch base URL from GitHub with caching
 async function getBaseUrl() {
   const now = Date.now();
   
@@ -15,11 +14,9 @@ async function getBaseUrl() {
   }
   
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
+    const response = await fetch(
+      'https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/baseurl.txt'
+    );
     
     if (response.ok) {
       const baseUrl = (await response.text()).trim().replace(/\/+$/, '');
@@ -27,16 +24,14 @@ async function getBaseUrl() {
       return baseUrl;
     }
   } catch (error) {
-    console.error('Error fetching base URL from GitHub:', error.message);
+    console.error('Error fetching base URL:', error.message);
   }
   
-  // Fallback
   const fallbackUrl = 'https://toonstream.dad';
   baseUrlCache = { url: fallbackUrl, timestamp: now };
   return fallbackUrl;
 }
 
-// Fetch proxy URL from GitHub with caching
 async function getProxyUrl() {
   const now = Date.now();
   
@@ -45,11 +40,9 @@ async function getProxyUrl() {
   }
   
   try {
-    const response = await fetch('https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-      }
-    });
+    const response = await fetch(
+      'https://raw.githubusercontent.com/senpaiorbit/toon_stream_api/refs/heads/main/src/cf_proxy.txt'
+    );
     
     if (response.ok) {
       const proxyUrl = (await response.text()).trim().replace(/\/+$/, '');
@@ -57,503 +50,353 @@ async function getProxyUrl() {
       return proxyUrl;
     }
   } catch (error) {
-    console.error('Error fetching proxy URL from GitHub:', error.message);
+    console.error('Error fetching proxy URL:', error.message);
   }
   
   proxyUrlCache = { url: null, timestamp: now };
   return null;
 }
 
-// Fetch with proxy fallback
-async function fetchWithProxy(targetUrl, refererUrl = null) {
+async function fetchWithProxy(targetUrl) {
   const proxyUrl = await getProxyUrl();
-  const baseUrl = await getBaseUrl();
   
-  const headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'max-age=0',
-    'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1',
-    'Referer': refererUrl || baseUrl
-  };
-  
-  // Try proxy first
   if (proxyUrl) {
     try {
       const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(targetUrl)}`;
       const proxyResponse = await fetch(proxyFetchUrl, {
-        headers,
-        redirect: 'follow',
         signal: AbortSignal.timeout(30000)
       });
       
       if (proxyResponse.ok) {
-        const html = await proxyResponse.text();
-        console.log('✓ Proxy fetch successful (HTML as text/plain)');
-        return html;
-      } else {
-        console.log(`✗ Proxy returned ${proxyResponse.status}, falling back to direct fetch`);
+        return await proxyResponse.text();
       }
     } catch (proxyError) {
-      console.log('✗ Proxy fetch failed:', proxyError.message);
+      console.log('Proxy fetch failed:', proxyError.message);
     }
   }
   
-  // Fallback to direct fetch
-  try {
-    const directResponse = await fetch(targetUrl, {
-      headers,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(30000)
-    });
-    
-    if (!directResponse.ok) {
-      throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
-    }
-    
-    const html = await directResponse.text();
-    console.log('✓ Direct fetch successful');
-    return html;
-  } catch (directError) {
-    throw new Error(`Both proxy and direct fetch failed: ${directError.message}`);
+  const directResponse = await fetch(targetUrl, {
+    signal: AbortSignal.timeout(30000)
+  });
+  
+  if (!directResponse.ok) {
+    throw new Error(`HTTP ${directResponse.status}: ${directResponse.statusText}`);
   }
+  
+  return await directResponse.text();
 }
 
-function extractImageUrl(imgSrc) {
-  if (!imgSrc) return null;
-  return imgSrc.startsWith('//') ? 'https:' + imgSrc : imgSrc;
+function normalizeImage(url) {
+  if (!url) return null;
+  let normalized = url.startsWith('//') ? 'https:' + url : url;
+  normalized = normalized.replace(/\/w\d+\//g, '/w500/');
+  return normalized;
 }
 
-// Parse server query
-function parseServers(serverParam, totalServers) {
-  if (!serverParam) return null;
-  
-  if (serverParam.toLowerCase() === 'all') {
-    return Array.from({length: totalServers}, (_, i) => i);
-  }
-  
-  const servers = [];
-  const parts = serverParam.split(',');
-  
-  for (const part of parts) {
-    const trimmed = part.trim();
-    
-    // Range: 0-4
-    if (trimmed.includes('-')) {
-      const [start, end] = trimmed.split('-').map(n => parseInt(n.trim()));
-      if (!isNaN(start) && !isNaN(end)) {
-        for (let i = start; i <= end; i++) {
-          if (!servers.includes(i)) servers.push(i);
-        }
-      }
-    }
-    // Single number: 3
-    else {
-      const num = parseInt(trimmed);
-      if (!isNaN(num) && !servers.includes(num)) {
-        servers.push(num);
-      }
-    }
-  }
-  
-  return servers.sort((a, b) => a - b);
-}
-
-// Parse server name query
-function parseServerNames(serverParam) {
-  if (!serverParam) return null;
-  
-  if (serverParam.toLowerCase() === 'all') {
-    return 'all';
-  }
-  
-  // Split by comma and trim
-  return serverParam.split(',').map(s => s.trim().toLowerCase());
-}
-
-// Extract iframe from HTML (embedded logic)
-async function extractIframeFromUrl(originalUrl) {
-  try {
-    console.log(`Extracting iframe from: ${originalUrl}`);
-    
-    const urlObj = new URL(originalUrl);
-    const fullUrl = urlObj.toString();
-    
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept': 'text/plain,text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-      'Sec-Ch-Ua-Mobile': '?0',
-      'Sec-Ch-Ua-Platform': '"Windows"',
-      'Sec-Fetch-Dest': 'iframe',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'cross-site',
-      'Upgrade-Insecure-Requests': '1',
-      'Cache-Control': 'max-age=0'
-    };
-    
-    const proxyUrl = await getProxyUrl();
-    let html = null;
-    
-    // Try proxy first for iframe extraction
-    if (proxyUrl) {
-      try {
-        const proxyFetchUrl = `${proxyUrl}?url=${encodeURIComponent(fullUrl)}`;
-        const proxyResponse = await fetch(proxyFetchUrl, {
-          headers,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        if (proxyResponse.ok) {
-          html = await proxyResponse.text();
-        }
-      } catch (proxyError) {
-        console.log('Proxy failed for iframe extraction:', proxyError.message);
-      }
-    }
-    
-    // Fallback to direct fetch
-    if (!html) {
-      try {
-        const directResponse = await fetch(fullUrl, {
-          headers,
-          redirect: 'follow',
-          signal: AbortSignal.timeout(15000)
-        });
-        
-        if (directResponse.status !== 200) {
-          console.error('Failed to fetch page:', directResponse.status);
-          return originalUrl;
-        }
-        
-        html = await directResponse.text();
-      } catch (directError) {
-        console.error('Error extracting iframe:', directError.message);
-        return originalUrl;
-      }
-    }
-    
-    if (!html) {
-      return originalUrl;
-    }
-    
-    // Extract iframe src using regex
-    const iframeMatch = html.match(/<iframe[^>]+src=["']([^"']+)["']/i);
-    
-    if (iframeMatch && iframeMatch[1]) {
-      const iframeSrc = iframeMatch[1];
-      console.log(`Extracted iframe: ${iframeSrc}`);
-      return iframeSrc;
-    } else {
-      console.log('No iframe found, using original URL');
-      return originalUrl;
-    }
-    
-  } catch (error) {
-    console.error('Error extracting iframe:', error.message);
-    return originalUrl;
-  }
-}
-
-// Scrape episode metadata
-function scrapeEpisodeMetadata($) {
-  const $article = $('article.post.single');
-  
-  return {
-    title: $article.find('.entry-title').text().trim(),
-    image: extractImageUrl($article.find('.post-thumbnail img').attr('src')),
-    description: $article.find('.description').text().trim(),
-    duration: $article.find('.duration').text().replace('min', '').trim(),
-    year: $article.find('.year').text().trim(),
-    rating: $('.vote .num').text().trim()
+function scrapeEpisodeInfo(html) {
+  const info = {
+    title: '',
+    image: null,
+    description: '',
+    duration: '',
+    year: '',
+    rating: '',
+    categories: [],
+    cast: []
   };
-}
-
-// Extract categories
-function scrapeCategories($) {
-  const categories = [];
-  $('.genres a').each((i, el) => {
-    categories.push({
-      name: $(el).text().trim(),
-      url: $(el).attr('href')
+  
+  const titleMatch = html.match(/<h1[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h1>/);
+  if (titleMatch) {
+    info.title = titleMatch[1].trim();
+  }
+  
+  const imageMatch = html.match(/<div[^>]*class="[^"]*post-thumbnail[^"]*"[^>]*>[\s\S]*?<img[^>]+src="([^"]+)"/);
+  if (imageMatch) {
+    info.image = normalizeImage(imageMatch[1]);
+  }
+  
+  const descMatch = html.match(/<div[^>]*class="[^"]*description[^"]*"[^>]*>(.*?)<\/div>/s);
+  if (descMatch) {
+    info.description = descMatch[1].trim();
+  }
+  
+  const durationMatch = html.match(/<span[^>]*class="[^"]*duration[^"]*"[^>]*>(\d+)\s*min<\/span>/);
+  if (durationMatch) {
+    info.duration = durationMatch[1];
+  }
+  
+  const yearMatch = html.match(/<span[^>]*class="[^"]*year[^"]*"[^>]*>(\d{4})<\/span>/);
+  if (yearMatch) {
+    info.year = yearMatch[1];
+  }
+  
+  const ratingMatch = html.match(/<span[^>]*class="[^"]*vote[^"]*"[^>]*>[\s\S]*?<span[^>]*class="[^"]*num[^"]*"[^>]*>([\d.]+)<\/span>/);
+  if (ratingMatch) {
+    info.rating = ratingMatch[1];
+  }
+  
+  const categoriesPattern = /<span[^>]*class="[^"]*genres[^"]*"[^>]*>(.*?)<\/span>/s;
+  const categoriesMatch = html.match(categoriesPattern);
+  if (categoriesMatch) {
+    const catLinkPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+    const catLinks = [...categoriesMatch[1].matchAll(catLinkPattern)];
+    catLinks.forEach(link => {
+      info.categories.push({
+        name: link[2].trim(),
+        url: link[1]
+      });
     });
-  });
-  return categories;
-}
-
-// Extract cast
-function scrapeCast($) {
-  const cast = [];
-  $('.cast-lst a').each((i, el) => {
-    cast.push({
-      name: $(el).text().trim(),
-      url: $(el).attr('href')
+  }
+  
+  const castPattern = /<ul[^>]*class="[^"]*cast-lst[^"]*"[^>]*>[\s\S]*?<p[^>]*>(.*?)<\/p>/s;
+  const castMatch = html.match(castPattern);
+  if (castMatch) {
+    const castLinkPattern = /<a[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/g;
+    const castLinks = [...castMatch[1].matchAll(castLinkPattern)];
+    castLinks.forEach(link => {
+      info.cast.push({
+        name: link[2].trim(),
+        url: link[1]
+      });
     });
-  });
-  return cast;
+  }
+  
+  return info;
 }
 
-// Extract navigation buttons
-function scrapeNavigation($) {
-  const nav = {
+function scrapeNavigation(html) {
+  const navigation = {
     previousEpisode: null,
     nextEpisode: null,
     seriesPage: null
   };
   
-  $('.epsdsnv a, .epsdsnv span').each((i, el) => {
-    const $el = $(el);
-    const text = $el.text().toLowerCase();
-    const href = $el.attr('href');
-    
-    if (text.includes('previous') && href) {
-      nav.previousEpisode = href;
-    } else if (text.includes('next') && href) {
-      nav.nextEpisode = href;
-    } else if (text.includes('season') && href) {
-      nav.seriesPage = href;
-    }
-  });
+  const navPattern = /<div[^>]*class="[^"]*epsdsnv[^"]*"[^>]*>(.*?)<\/div>/s;
+  const navMatch = html.match(navPattern);
   
-  return nav;
+  if (navMatch) {
+    const content = navMatch[1];
+    
+    const prevPattern = /<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>[\s\S]*?Previous/;
+    const prevMatch = content.match(prevPattern);
+    if (prevMatch) {
+      navigation.previousEpisode = prevMatch[1];
+    }
+    
+    const nextPattern = /<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<span[^>]*>[\s\S]*?Next/;
+    const nextMatch = content.match(nextPattern);
+    if (nextMatch) {
+      navigation.nextEpisode = nextMatch[1];
+    }
+    
+    const seriesPattern = /<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?Seasons/;
+    const seriesMatch = content.match(seriesPattern);
+    if (seriesMatch) {
+      navigation.seriesPage = seriesMatch[1];
+    }
+  }
+  
+  return navigation;
 }
 
-// Extract seasons
-function scrapeSeasons($) {
+function scrapeSeasons(html) {
   const seasons = [];
+  const seasonPattern = /<li[^>]*class="[^"]*sel-temp[^"]*"[^>]*><a[^>]+data-post="([^"]+)"[^>]+data-season="([^"]+)"[^>]*>(.*?)<\/a>/g;
+  const matches = [...html.matchAll(seasonPattern)];
   
-  $('.choose-season .aa-cnt.sub-menu li.sel-temp').each((i, el) => {
-    const $el = $(el);
-    const $link = $el.find('a');
-    
-    const seasonText = $link.text().trim(); // e.g., "Season 1"
-    const dataPost = $link.attr('data-post');
-    const dataSeason = $link.attr('data-season');
-    
+  for (const match of matches) {
     seasons.push({
-      name: seasonText,
-      seasonNumber: parseInt(dataSeason) || 0,
-      dataPost: dataPost || null,
-      dataSeason: dataSeason || null
+      name: match[3].trim(),
+      seasonNumber: parseInt(match[2]),
+      dataPost: match[1],
+      dataSeason: match[2]
     });
-  });
+  }
   
   return seasons;
 }
 
-// NEW FUNCTION: Extract episodes list
-function scrapeEpisodesList($) {
+function scrapeEpisodes(html) {
   const episodes = [];
+  const episodePattern = /<ul[^>]*id="episode_by_temp"[^>]*>(.*?)<\/ul>/s;
+  const episodeMatch = html.match(episodePattern);
   
-  $('#episode_by_temp li').each((i, el) => {
-    const $el = $(el);
-    const $article = $el.find('article.episodes');
+  if (!episodeMatch) return episodes;
+  
+  const episodesSection = episodeMatch[1];
+  const liPattern = /<li[^>]*>\s*<article[^>]*>([\s\S]*?)<\/article>\s*<\/li>/g;
+  const items = [...episodesSection.matchAll(liPattern)];
+  
+  for (const item of items) {
+    const content = item[1];
     
-    const episodeNumber = $article.find('.num-epi').text().trim();
-    const title = $article.find('.entry-title').text().trim();
-    const image = extractImageUrl($article.find('.post-thumbnail img').attr('src'));
-    const time = $article.find('.time').text().trim();
-    const url = $article.find('a.lnk-blk').attr('href');
+    const numEpiMatch = content.match(/<span[^>]*class="[^"]*num-epi[^"]*"[^>]*>(.*?)<\/span>/);
+    const titleMatch = content.match(/<h2[^>]*class="[^"]*entry-title[^"]*"[^>]*>(.*?)<\/h2>/);
+    const imageMatch = content.match(/<img[^>]+src="([^"]+)"/);
+    const timeMatch = content.match(/<span[^>]*class="[^"]*time[^"]*"[^>]*>(.*?)<\/span>/);
+    const urlMatch = content.match(/<a[^>]+href="([^"]+)"[^>]*class="lnk-blk"/);
     
-    if (episodeNumber && title && url) {
-      episodes.push({
-        episodeNumber,
-        title,
-        image,
-        time,
-        url
-      });
-    }
-  });
+    episodes.push({
+      episodeNumber: numEpiMatch ? numEpiMatch[1].trim() : '',
+      title: titleMatch ? titleMatch[1].trim() : '',
+      image: normalizeImage(imageMatch ? imageMatch[1] : null),
+      time: timeMatch ? timeMatch[1].trim() : '',
+      url: urlMatch ? urlMatch[1] : ''
+    });
+  }
   
   return episodes;
 }
 
-// Extract servers/iframes
-async function scrapeServers($) {
+function scrapeServers(html, apiUrl) {
   const servers = [];
-  let serverIndex = 0;
+  const serverPattern = /<ul[^>]*class="[^"]*aa-tbs aa-tbs-video[^"]*"[^>]*>(.*?)<\/ul>/s;
+  const serverMatch = html.match(serverPattern);
   
-  // Extract from video player iframes
-  $('.video-player .video').each((i, el) => {
-    const $el = $(el);
-    const $iframe = $el.find('iframe');
-    const src = $iframe.attr('src') || $iframe.attr('data-src');
-    
-    if (src) {
-      servers.push({
-        serverNumber: serverIndex,
-        originalSrc: src,
-        src: src,
-        isActive: $el.hasClass('on')
-      });
-      serverIndex++;
-    }
+  if (!serverMatch) return servers;
+  
+  const serversSection = serverMatch[1];
+  const liPattern = /<li[^>]*>\s*<a[^>]+class="[^"]*btn([^"]*)"[^>]+href="#options-(\d+)"[^>]*>[\s\S]*?<span>(\d+)<\/span>[\s\S]*?<span[^>]*class="[^"]*server[^"]*"[^>]*>(.*?)<\/span>/g;
+  const items = [...serversSection.matchAll(liPattern)];
+  
+  const iframePattern = /<div[^>]*id="options-(\d+)"[^>]*>[\s\S]*?<iframe[^>]+(?:src|data-src)="([^"]+)"/g;
+  const iframes = [...html.matchAll(iframePattern)];
+  const iframeMap = {};
+  iframes.forEach(iframe => {
+    iframeMap[iframe[1]] = iframe[2];
   });
   
-  // Extract server names from buttons
-  $('.aa-tbs-video li').each((i, el) => {
-    const $el = $(el);
-    const $btn = $el.find('.btn');
-    const serverNum = parseInt($btn.find('span').first().text()) - 1;
-    const serverName = $btn.find('.server').text()
-      .replace('-Multi Audio', '')
-      .replace('Multi Audio', '')
-      .trim();
+  for (const item of items) {
+    const isActive = item[1].includes('on');
+    const serverNumber = parseInt(item[2]);
+    const displayNumber = parseInt(item[3]);
+    const serverText = item[4].trim();
     
-    if (servers[serverNum]) {
-      servers[serverNum].name = serverName;
-      servers[serverNum].displayNumber = serverNum + 1;
-      servers[serverNum].isActive = $btn.hasClass('on');
-    }
-  });
-  
-  // Process all servers - extract real iframe URLs
-  console.log(`Processing ${servers.length} servers...`);
-  for (let i = 0; i < servers.length; i++) {
-    if (servers[i].originalSrc) {
-      const extractedUrl = await extractIframeFromUrl(servers[i].originalSrc);
-      servers[i].src = extractedUrl;
-    }
+    const serverNameMatch = serverText.match(/^([\w\/]+)/);
+    const serverName = serverNameMatch ? serverNameMatch[1].trim() : 'Unknown';
+    
+    const originalSrc = iframeMap[serverNumber] || '';
+    
+    servers.push({
+      serverNumber: serverNumber,
+      originalSrc: originalSrc,
+      src: `${apiUrl}/api/embed?url=${encodeURIComponent(originalSrc)}`,
+      isActive: isActive,
+      name: serverName,
+      displayNumber: displayNumber
+    });
   }
   
   return servers;
 }
 
-// Filter servers by query
-function filterServers(servers, serverQuery) {
-  if (!serverQuery) return servers;
+async function scrapeEpisodePage(baseUrl, slug, apiUrl) {
+  const episodeUrl = `${baseUrl}/episode/${slug}/`;
+  const html = await fetchWithProxy(episodeUrl);
   
-  // Try parsing as numbers first
-  const requestedNumbers = parseServers(serverQuery, servers.length);
-  if (requestedNumbers && requestedNumbers.length > 0) {
-    return servers.filter(s => requestedNumbers.includes(s.serverNumber));
+  const episodeInfo = scrapeEpisodeInfo(html);
+  const navigation = scrapeNavigation(html);
+  const seasons = scrapeSeasons(html);
+  const episodes = scrapeEpisodes(html);
+  const servers = scrapeServers(html, apiUrl);
+  
+  return {
+    success: true,
+    data: {
+      baseUrl: baseUrl,
+      episodeUrl: episodeUrl,
+      episodeSlug: slug,
+      pageType: 'episode',
+      scrapedAt: new Date().toISOString(),
+      ...episodeInfo,
+      navigation: navigation,
+      seasons: seasons,
+      episodes: episodes,
+      servers: servers
+    },
+    stats: {
+      totalServersAvailable: servers.length,
+      serversReturned: servers.length,
+      castCount: episodeInfo.cast.length,
+      categoriesCount: episodeInfo.categories.length,
+      seasonsCount: seasons.length,
+      episodesCount: episodes.length
+    }
+  };
+}
+
+export default async function handler(request) {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 200,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET,OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      }
+    });
   }
   
-  // Try parsing as names
-  const requestedNames = parseServerNames(serverQuery);
-  if (requestedNames === 'all') {
-    return servers;
-  }
-  
-  if (requestedNames && requestedNames.length > 0) {
-    return servers.filter(s => 
-      requestedNames.some(name => s.name.toLowerCase().includes(name))
+  if (request.method !== 'GET') {
+    return new Response(
+      JSON.stringify({ success: false, error: 'Method not allowed. Use GET request.' }),
+      { 
+        status: 405, 
+        headers: { 'Content-Type': 'application/json' } 
+      }
     );
   }
   
-  return servers;
-}
-
-// Main scraper
-async function scrapeEpisodePage(baseUrl, episodeSlug, serverQuery) {
   try {
-    const episodeUrl = `${baseUrl}/episode/${episodeSlug}/`;
-    console.log(`Scraping: ${episodeUrl}`);
+    const url = new URL(request.url);
+    const slug = url.searchParams.get('slug');
     
-    const html = await fetchWithProxy(episodeUrl, baseUrl);
-    const $ = cheerio.load(html);
-    
-    const metadata = scrapeEpisodeMetadata($);
-    const allServers = await scrapeServers($);
-    const filteredServers = filterServers(allServers, serverQuery);
-    const seasons = scrapeSeasons($);
-    const episodesList = scrapeEpisodesList($); // NEW: Extract episodes list
-    
-    const data = {
-      baseUrl,
-      episodeUrl,
-      episodeSlug,
-      pageType: 'episode',
-      scrapedAt: new Date().toISOString(),
-      ...metadata,
-      categories: scrapeCategories($),
-      cast: scrapeCast($),
-      navigation: scrapeNavigation($),
-      seasons: seasons,
-      episodes: episodesList, // NEW: Include episodes in response
-      servers: filteredServers
-    };
-    
-    return {
-      success: true,
-      data,
-      stats: {
-        totalServersAvailable: allServers.length,
-        serversReturned: filteredServers.length,
-        castCount: data.cast.length,
-        categoriesCount: data.categories.length,
-        seasonsCount: seasons.length,
-        episodesCount: episodesList.length // NEW: Episode count
-      }
-    };
-    
-  } catch (error) {
-    if (error.message.includes('404')) {
-      return { success: false, error: 'Episode not found', statusCode: 404 };
+    if (!slug) {
+      return new Response(
+        JSON.stringify({ 
+          success: false, 
+          error: 'Episode slug parameter "slug" is required.' 
+        }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
     }
-    return { success: false, error: error.message };
-  }
-}
-
-// Vercel handler
-module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
-  res.setHeader('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=600');
-  
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-  
-  if (req.method !== 'GET') {
-    return res.status(405).json({ success: false, error: 'Method not allowed. Use GET request.' });
-  }
-  
-  try {
+    
     const baseUrl = await getBaseUrl();
+    
     if (!baseUrl) {
-      return res.status(500).json({ success: false, error: 'Base URL not found.' });
+      return new Response(
+        JSON.stringify({ success: false, error: 'Base URL not found.' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
     }
     
-    const episodeSlug = req.query.slug || req.query.episode;
-    if (!episodeSlug) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Episode slug required. Examples: ?slug=attack-on-titan-2x1 or ?slug=attack-on-titan-2x1&server=0,1,2'
-      });
-    }
+    const apiUrl = `${url.protocol}//${url.host}`;
+    const result = await scrapeEpisodePage(baseUrl, slug, apiUrl);
     
-    const serverQuery = req.query.server || req.query.servers;
-    
-    const result = await scrapeEpisodePage(baseUrl, episodeSlug, serverQuery);
-    
-    if (!result.success && result.statusCode === 404) {
-      return res.status(404).json(result);
-    }
-    
-    res.status(result.success ? 200 : 500).json(result);
+    return new Response(
+      JSON.stringify(result),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600'
+        }
+      }
+    );
     
   } catch (error) {
     console.error('Handler error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Internal server error', 
-      message: error.message 
-    });
+    return new Response(
+      JSON.stringify({ 
+        success: false, 
+        error: 'Internal server error', 
+        message: error.message 
+      }),
+      { 
+        status: 500, 
+        headers: { 'Content-Type': 'application/json' } 
+      }
+    );
   }
-};
+}
