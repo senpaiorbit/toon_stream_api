@@ -93,6 +93,81 @@ function normalizeImage(url) {
   return normalized;
 }
 
+function extractLanguages(categories) {
+  const languages = [];
+  const languageKeywords = [
+    'English',
+    'Hindi',
+    'Japaneses',
+    'Japanese',
+    'Spanish',
+    'French',
+    'German',
+    'Italian',
+    'Portuguese',
+    'Chinese',
+    'Korean',
+    'Tamil',
+    'Telugu',
+    'Malayalam',
+    'Bengali',
+    'Marathi',
+    'Gujarati',
+    'Kannada',
+    'Punjabi',
+    'Urdu',
+    'Arabic',
+    'Russian',
+    'Thai',
+    'Vietnamese',
+    'Indonesian',
+    'Malay',
+    'Turkish',
+    'Polish',
+    'Dutch',
+    'Swedish',
+    'Norwegian',
+    'Danish',
+    'Finnish',
+    'Greek',
+    'Hebrew',
+    'Czech',
+    'Hungarian',
+    'Romanian',
+    'Ukrainian',
+    'Persian',
+    'Farsi'
+  ];
+  
+  categories.forEach(category => {
+    const categoryName = category.name;
+    const categoryUrl = category.url.toLowerCase();
+    
+    // Check if category URL contains '/language/' path
+    if (categoryUrl.includes('/language/') || categoryUrl.includes('/lang/')) {
+      // Extract language from category name
+      languageKeywords.forEach(lang => {
+        if (categoryName.toLowerCase().includes(lang.toLowerCase())) {
+          if (!languages.includes(lang)) {
+            languages.push(lang);
+          }
+        }
+      });
+    }
+    
+    // Also check direct language names in categories
+    languageKeywords.forEach(lang => {
+      if (categoryName.toLowerCase() === lang.toLowerCase()) {
+        if (!languages.includes(lang)) {
+          languages.push(lang);
+        }
+      }
+    });
+  });
+  
+  return languages;
+}
+
 function scrapeEpisodeInfo(html) {
   const info = {
     title: '',
@@ -320,6 +395,9 @@ async function scrapeEpisodePage(baseUrl, slug, apiUrl) {
   const episodes = scrapeEpisodes(html);
   const servers = scrapeServers(html, apiUrl);
   
+  // Extract languages from categories
+  const languages = extractLanguages(episodeInfo.categories);
+  
   return {
     success: true,
     data: {
@@ -329,6 +407,7 @@ async function scrapeEpisodePage(baseUrl, slug, apiUrl) {
       pageType: 'episode',
       scrapedAt: new Date().toISOString(),
       ...episodeInfo,
+      languages: languages,
       navigation: navigation,
       seasons: seasons,
       episodes: episodes,
@@ -339,6 +418,7 @@ async function scrapeEpisodePage(baseUrl, slug, apiUrl) {
       serversReturned: servers.length,
       castCount: episodeInfo.cast.length,
       categoriesCount: episodeInfo.categories.length,
+      languagesCount: languages.length,
       seasonsCount: seasons.length,
       episodesCount: episodes.length
     }
