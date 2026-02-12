@@ -423,15 +423,7 @@ async function scrapeServers(html) {
       targetId: server.targetId,
       isActive: server.isActive,
       originalSrc: server.originalSrc,
-      embedData: {
-        parsed: embedResult.parsed || {},
-        resolvedUrl: embedResult.resolvedUrl || server.originalSrc,
-        iframeSrc: embedResult.iframeSrc,
-        redirectTarget: embedResult.redirectTarget,
-        success: embedResult.success
-      },
-      // Direct access to the actual video URL
-      videoUrl: embedResult.iframeSrc || embedResult.redirectTarget || null
+      src: embedResult.iframeSrc || embedResult.redirectTarget || server.originalSrc
     });
   }
   
@@ -451,9 +443,6 @@ async function scrapeEpisodePage(baseUrl, slug) {
   // Extract languages from categories
   const languages = extractLanguages(episodeInfo.categories);
   
-  // Count successful server resolutions
-  const successfulServers = servers.filter(s => s.embedData.success && s.videoUrl).length;
-  
   return {
     success: true,
     data: {
@@ -472,7 +461,6 @@ async function scrapeEpisodePage(baseUrl, slug) {
     stats: {
       totalServersAvailable: servers.length,
       serversReturned: servers.length,
-      successfullyResolvedServers: successfulServers,
       castCount: episodeInfo.cast.length,
       categoriesCount: episodeInfo.categories.length,
       languagesCount: languages.length,
