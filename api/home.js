@@ -86,8 +86,8 @@ export default async function handler(request) {
   if (guard) return guard;
 
   try {
-    // Root path '/' — not '/home'
-    const { html, baseUrl } = await fetchPage('/');
+    // Changed from '/' → '/home'
+    const { html, baseUrl } = await fetchPage('/home');
 
     const data = {
       baseUrl,
